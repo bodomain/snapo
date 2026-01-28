@@ -1,0 +1,50 @@
+# Pomodoro CLI Application
+
+A simple command-line interface for the Pomodoro technique, written in Python.
+
+## Prerequisites
+
+- Python 3.x
+- `simpleaudio` library
+- `coin.wav` (included in the project directory)
+
+## Installation
+
+Before running the application, install the required dependencies using pip:
+
+```bash
+pip install -r requirements.txt
+```
+
+Note: On Linux, `simpleaudio` may require development headers for ALSA. You might need to install `libasound2-dev` (Ubuntu/Debian) or `alsa-lib` (Arch Linux).
+
+## Usage
+
+Run the application using Python:
+
+```bash
+python pomodoro.py [options]
+```
+
+### Command-line Arguments
+
+| Argument | Long Form | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `-w` | `--work` | Work session duration in minutes | 25 |
+| `-b` | `--break` | Short break duration in minutes | 5 |
+| `-lb` | `--long-break` | Long break duration in minutes | 15 |
+| `-c` | `--cycles` | Number of work cycles | 4 |
+| `-h` | `--help` | Show help message and exit | N/A |
+
+### Example
+
+To start a session with 20 minutes of work, a 10-minute short break, and 4 cycles:
+
+```bash
+python pomodoro.py -w 20 -b 10 -c 4
+```
+
+## Notification Sound
+
+- The application plays `coin.wav` using the `simpleaudio` library at the end of each work and break session.
+- If the sound fails to play (e.g., missing audio drivers or library), it will fall back to a terminal bell sound (`\a`).
