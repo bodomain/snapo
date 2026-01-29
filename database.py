@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
 
-DB_NAME = "pomodoro.db"
+DB_NAME = "prodz.db"
 
 def init_db():
     """Initializes the database and creates the table if it doesn't exist."""

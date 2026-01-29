@@ -84,8 +84,8 @@ def countdown(t, label, activity_name=None):
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
         print() # Ensure newline after loop
 
-def pomodoro(work_minutes, break_minutes, long_break_minutes, cycles, activity):
-    """Starts the Pomodoro timer."""
+def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activity):
+    """Starts the prodzCLI timer."""
     database.init_db()
     for i in range(cycles):
         print(f"--- Cycle {i+1}/{cycles} ---")
@@ -106,10 +106,10 @@ def pomodoro(work_minutes, break_minutes, long_break_minutes, cycles, activity):
             print("\nBreak complete!")
             play_sound()
 
-    print("Pomodoro finished!")
+    print("prodzCLI session finished!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="A simple Pomodoro timer.")
+    parser = argparse.ArgumentParser(description="prodzCLI - A simple productivity timer.")
     parser.add_argument("-w", "--work", type=int, default=25,
                         help="Work session duration in minutes (default: 25)")
     parser.add_argument("-b", "--break", type=int, default=5,
@@ -122,4 +122,4 @@ if __name__ == "__main__":
                         help="Name of the activity (default: 'whatever')")
     args = parser.parse_args()
 
-    pomodoro(args.work, getattr(args, 'break'), args.long_break, args.cycles, args.activity)
+    start_prodz(args.work, getattr(args, 'break'), args.long_break, args.cycles, args.activity)

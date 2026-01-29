@@ -1,29 +1,18 @@
-# Pomodoro CLI Application
+# prodzCLI Application
 
-A simple command-line interface for the Pomodoro technique, written in Python.
+A simple command-line interface for productivity tracking, written in Python.
 
 ## Prerequisites
 
 - Python 3.x
-- `simpleaudio` library
-- `coin.wav` (included in the project directory)
-
-## Installation
-
-Before running the application, install the required dependencies using pip:
-
-```bash
-pip install -r requirements.txt
-```
-
-Note: On Linux, `simpleaudio` may require development headers for ALSA. You might need to install `libasound2-dev` (Ubuntu/Debian) or `alsa-lib` (Arch Linux).
+- `bell.wav` (included in the project directory)
 
 ## Usage
 
 Run the application using Python:
 
 ```bash
-python pomodoro.py [options]
+python prodz_cli.py [options]
 ```
 
 ### Command-line Arguments
@@ -41,10 +30,10 @@ python pomodoro.py [options]
 To start a session with 20 minutes of work, a 10-minute short break, and 4 cycles:
 
 ```bash
-python pomodoro.py -w 20 -b 10 -c 4
+python prodz_cli.py -w 20 -b 10 -c 4
 ```
 
 ## Notification Sound
 
-- The application plays `coin.wav` using the `simpleaudio` library at the end of each work and break session.
-- If the sound fails to play (e.g., missing audio drivers or library), it will fall back to a terminal bell sound (`\a`).
+- The application plays `bell.wav` using system audio tools at the end of each work and break session.
+- If the sound fails to play, it will fall back to a terminal bell sound (`\a`).

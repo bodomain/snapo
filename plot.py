@@ -1,7 +1,7 @@
 import sqlite3
 import shutil
 
-DB_NAME = "pomodoro.db"
+DB_NAME = "prodz.db"
 
 def get_daily_stats():
     conn = sqlite3.connect(DB_NAME)

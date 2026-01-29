@@ -1,6 +1,6 @@
-# Pomodoro CLI
+# prodzCLI
 
-A simple, lightweight, and customizable Pomodoro timer for the command line, written in Python. It helps you manage your time using the Pomodoro Technique, tracks your activities, and visualizes your daily productivity.
+A simple, lightweight, and customizable productivity timer for the command line, written in Python. It helps you manage your time (using the Pomodoro Technique), tracks your activities, and visualizes your daily productivity.
 
 ## Features
 
@@ -24,14 +24,14 @@ A simple, lightweight, and customizable Pomodoro timer for the command line, wri
     ```bash
     cd snapo
     ```
-3.  Ensure `pomodoro.py` and `bell.wav` are in the same directory.
+3.  Ensure `prodz_cli.py` and `bell.wav` are in the same directory.
 
 ## Usage
 
 Run the timer using Python:
 
 ```bash
-python pomodoro.py [options]
+python prodz_cli.py [options]
 ```
 
 ### Command-line Arguments
@@ -58,12 +58,12 @@ While the timer is running, you can use the following keys:
 Start a session for "Python Study" with 45-minute work intervals:
 
 ```bash
-python pomodoro.py -w 45 -a "Python Study"
+python prodz_cli.py -w 45 -a "Python Study"
 ```
 
 ## Statistics
 
-Your completed sessions (and partially completed ones logged via `x`) are stored in `pomodoro.db`. To view a graph of your daily productivity:
+Your completed sessions (and partially completed ones logged via `x`) are stored in `prodz.db`. To view a graph of your daily productivity:
 
 ```bash
 python plot.py
@@ -81,11 +81,11 @@ Daily Activity (Duration in Minutes)
 
 ## Project Structure
 
--   `pomodoro.py`: Main application logic.
+-   `prodz_cli.py`: Main application logic.
 -   `database.py`: Handles SQLite database operations.
 -   `plot.py`: Generates the statistics chart.
 -   `bell.wav`: Notification sound file.
--   `pomodoro.db`: (Created on first run) Stores session data.
+-   `prodz.db`: (Created on first run) Stores session data.
 
 ## License
 
