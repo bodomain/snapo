@@ -50,7 +50,7 @@ python prodz_cli.py [options]
 While the timer is running, you can use the following keys:
 
 -   **`p`**: **Pause** or **Resume** the timer.
--   **`x`**: **Log & Exit**. Stops the timer, saves the elapsed time to the database, and exits.
+-   **`l`**: **Log & Exit**. Stops the timer, saves the elapsed time to the database, and exits.
 -   **`q`**: **Quit**. Exits the application immediately *without* saving the session.
 
 ### Example

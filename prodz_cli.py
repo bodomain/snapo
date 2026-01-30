@@ -28,7 +28,7 @@ def play_sound():
 
 def countdown(t, label, activity_name=None):
     """Displays a countdown timer with pause and exit functionality."""
-    print(f"{label}: Starting... (p:pause, x:log&exit, q:quit)", end="\r")
+    print(f"{label}: Starting... (p:pause, l:log&exit, q:quit)", end="\r")
     
     initial_t = t
     # Save original terminal settings
@@ -59,12 +59,12 @@ def countdown(t, label, activity_name=None):
                             elif key_paused.lower() == 'q':
                                 key = 'q'
                                 break
-                            elif key_paused.lower() == 'x':
+                            elif key_paused.lower() == 'l':
                                 # Handle exit from pause state
-                                key = 'x' 
+                                key = 'l' 
                                 break
                 
-                if key.lower() == 'x':
+                if key.lower() == 'l':
                     elapsed_seconds = initial_t - t
                     elapsed_minutes = elapsed_seconds / 60
                     print(f"\nExiting... Session logged: {elapsed_minutes:.2f} min")

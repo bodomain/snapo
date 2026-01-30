@@ -19,14 +19,15 @@ COLORS = [
     "\033[96m", # Light Cyan
 ]
 RESET = "\033[0m"
+DIM = "\033[2m"
 
 def get_data():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Fetch individual sessions
     cursor.execute('''
-        SELECT date, activity, SUM(duration_minutes) 
+        SELECT date, activity, duration_minutes 
         FROM sessions 
-        GROUP BY date, activity 
         ORDER BY date ASC
     ''')
     data = cursor.fetchall()
@@ -38,13 +39,17 @@ def draw_chart(data):
         print("No data found in database.")
         return
 
-    # Organize data by date
+    # Organize data: date -> activity -> list of durations
     daily_stats = {}
     activities = set()
+    
     for date, activity, duration in data:
         if date not in daily_stats:
             daily_stats[date] = {}
-        daily_stats[date][activity] = duration
+        if activity not in daily_stats[date]:
+            daily_stats[date][activity] = []
+        
+        daily_stats[date][activity].append(duration)
         activities.add(activity)
     
     # Assign colors to activities
@@ -54,7 +59,7 @@ def draw_chart(data):
     # Calculate max daily total for scaling
     max_val = 0
     for date, acts in daily_stats.items():
-        total = sum(acts.values())
+        total = sum(sum(durations) for durations in acts.values())
         if total > max_val:
             max_val = total
 
@@ -70,23 +75,32 @@ def draw_chart(data):
     print("\nDaily Activity (Duration in Minutes)\n")
 
     for date, acts in daily_stats.items():
-        total_duration = sum(acts.values())
+        total_duration = sum(sum(durations) for durations in acts.values())
         
         # Build the stacked bar
         bar_str = ""
         
-        # Sort activities by duration for better visualization (largest first) or name? 
-        # Keeping them consistent (by name) usually looks cleaner in stacks.
         for activity in sorted_activities:
-            duration = acts.get(activity, 0)
-            if duration > 0:
-                segment_len = int((duration / max_val) * bar_width)
-                # Ensure at least one block if there is significant duration but < 1 char
-                if segment_len == 0 and duration > 0:
-                     segment_len = 1
-                
+            if activity in acts:
+                durations = acts[activity]
                 color = activity_colors[activity]
-                bar_str += f"{color}{'█' * segment_len}{RESET}"
+                
+                # Build segments for this activity
+                segments = []
+                for dur in durations:
+                    if dur > 0:
+                        # Calculate length for this specific session
+                        segment_len = int((dur / max_val) * bar_width)
+                        # Ensure visibility for small sessions
+                        if segment_len == 0 and dur > 0:
+                            segment_len = 1
+                        segments.append("█" * segment_len)
+                
+                # Join sessions with a thin separator
+                # We apply the color to the blocks, and use a dim separator
+                activity_bar = f"{RESET}{DIM}|{RESET}{color}".join(segments)
+                
+                bar_str += f"{color}{activity_bar}{RESET}"
         
         print(f"{date} | {bar_str} {total_duration:.2f}m")
 
