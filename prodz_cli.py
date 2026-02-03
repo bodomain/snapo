@@ -7,6 +7,7 @@ import sys
 import select
 import termios
 import tty
+import plot
 
 def play_sound():
     """Plays a notification sound using system tools."""
@@ -108,18 +109,60 @@ def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activit
 
     print("prodzCLI session finished!")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="prodzCLI - A simple productivity timer.")
-    parser.add_argument("-w", "--work", type=int, default=25,
-                        help="Work session duration in minutes (default: 25)")
-    parser.add_argument("-b", "--break", type=int, default=5,
-                        help="Short break duration in minutes (default: 5)")
-    parser.add_argument("-lb", "--long-break", type=int, default=15,
-                        help="Long break duration in minutes (default: 15)")
-    parser.add_argument("-c", "--cycles", type=int, default=4,
-                        help="Number of work cycles (default: 4)")
-    parser.add_argument("-a", "--activity", type=str, default="whatever",
-                        help="Name of the activity (default: 'whatever')")
-    args = parser.parse_args()
+def input_safe_int(prompt, default):
+    try:
+        val = input(f"{prompt} [{default}]: ").strip()
+        return int(val) if val else default
+    except ValueError:
+        return default
 
-    start_prodz(args.work, getattr(args, 'break'), args.long_break, args.cycles, args.activity)
+def show_menu():
+    while True:
+        print("\n--- Prodz CLI Menu ---")
+        print("1. Start Default Session (25/5)")
+        print("2. Start Custom Session")
+        print("3. View Statistics")
+        print("4. Quit")
+        
+        choice = input("Enter choice: ").strip()
+        
+        if choice == '1':
+            activity = input("Activity name [default]: ").strip() or "default"
+            start_prodz(25, 5, 15, 4, activity)
+        elif choice == '2':
+            activity = input("Activity name [custom]: ").strip() or "custom"
+            w = input_safe_int("Work minutes", 25)
+            b = input_safe_int("Short break minutes", 5)
+            lb = input_safe_int("Long break minutes", 15)
+            c = input_safe_int("Cycles", 4)
+            start_prodz(w, b, lb, c, activity)
+        elif choice == '3':
+            try:
+                data = plot.get_data()
+                plot.draw_chart(data)
+            except Exception as e:
+                print(f"Error showing stats: {e}")
+        elif choice == '4':
+            print("Goodbye!")
+            sys.exit(0)
+        else:
+            print("Invalid choice, try again.")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        parser = argparse.ArgumentParser(description="prodzCLI - A simple productivity timer.")
+        parser.add_argument("-w", "--work", type=int, default=25,
+                            help="Work session duration in minutes (default: 25)")
+        parser.add_argument("-b", "--break", type=int, default=5,
+                            help="Short break duration in minutes (default: 5)")
+        parser.add_argument("-lb", "--long-break", type=int, default=15,
+                            help="Long break duration in minutes (default: 15)")
+        parser.add_argument("-c", "--cycles", type=int, default=4,
+                            help="Number of work cycles (default: 4)")
+        parser.add_argument("-a", "--activity", type=str, default="whatever",
+                            help="Name of the activity (default: 'whatever')")
+        args = parser.parse_args()
+
+        start_prodz(args.work, getattr(args, 'break'), args.long_break, args.cycles, args.activity)
+    else:
+        show_menu()
