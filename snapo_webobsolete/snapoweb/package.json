@@ -1,0 +1,13 @@
+{
+  "name": "snapo",
+  "version": "1.0.0",
+  "description": "Prodz CLI to Web App Migration",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && source venv/bin/activate && uvicorn main:app --reload --port 8000",
+    "dev:frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
