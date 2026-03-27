@@ -1,5 +1,6 @@
 # Databases
-*.db
+
+#prodz.db*
 
 # Python
 __pycache__/
