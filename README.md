@@ -43,6 +43,7 @@ python prodz_cli.py [options]
 | `-lb` | `--long-break` | Duration of the long break (minutes) | 15 |
 | `-c` | `--cycles` | Number of work cycles before a long break/finish | 4 |
 | `-a` | `--activity` | Name of the activity/task being tracked | "whatever" |
+| `-t` | `--text` | Short comment about the activity | "" |
 | `-h` | `--help` | Show the help message and exit | - |
 
 ### Interactive Controls
