@@ -34,7 +34,7 @@ def play_sound():
         print("\a", end="", flush=True)
 
 
-def countdown(t, label, activity_name=None):
+def countdown(t, label, activity_name=None, comment=""):
     """Displays a countdown timer with pause and exit functionality."""
     print(f"{label}: Starting... (p:pause, l:log&exit, q:quit)", end="\r")
 
@@ -87,7 +87,7 @@ def countdown(t, label, activity_name=None):
                     elapsed_minutes = elapsed_seconds / 60
                     print(f"\nExiting... Session logged: {elapsed_minutes:.2f} min")
                     if activity_name:
-                        database.log_session(activity_name, elapsed_minutes)
+                        database.log_session(activity_name, elapsed_minutes, comment)
                     sys.exit(0)
 
                 if key.lower() == "q":
@@ -103,16 +103,16 @@ def countdown(t, label, activity_name=None):
         print()  # Ensure newline after loop
 
 
-def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activity):
+def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activity, comment=""):
     """Starts the prodzCLI timer."""
     database.init_db()
     for i in range(cycles):
         print(f"--- Cycle {i + 1}/{cycles} ---")
         print(f"Starting work session: {activity}")
-        countdown(work_minutes * 60, "Work", activity)
+        countdown(work_minutes * 60, "Work", activity, comment)
         print("\nWork session complete!")
         play_sound()
-        database.log_session(activity, work_minutes)
+        database.log_session(activity, work_minutes, comment)
 
         if (i + 1) % 4 == 0:
             print("Starting long break...")
@@ -148,14 +148,16 @@ def show_menu():
 
         if choice == "1":
             activity = input("Activity name [default]: ").strip() or "default"
-            start_prodz(25, 5, 15, 4, activity)
+            comment = input("Comment [optional]: ").strip()
+            start_prodz(25, 5, 15, 4, activity, comment)
         elif choice == "2":
             activity = input("Activity name [custom]: ").strip() or "custom"
+            comment = input("Comment [optional]: ").strip()
             w = input_safe_int("Work minutes", 25)
             b = input_safe_int("Short break minutes", 5)
             lb = input_safe_int("Long break minutes", 15)
             c = input_safe_int("Cycles", 4)
-            start_prodz(w, b, lb, c, activity)
+            start_prodz(w, b, lb, c, activity, comment)
         elif choice == "3":
             try:
                 data = plot.get_data()
@@ -209,6 +211,13 @@ if __name__ == "__main__":
             default="whatever",
             help="Name of the activity (default: 'whatever')",
         )
+        parser.add_argument(
+            "-t",
+            "--text",
+            type=str,
+            default="",
+            help="Short comment about the activity",
+        )
         args = parser.parse_args()
 
         start_prodz(
@@ -217,6 +226,7 @@ if __name__ == "__main__":
             args.long_break,
             args.cycles,
             args.activity,
+            args.text,
         )
     else:
         show_menu()
