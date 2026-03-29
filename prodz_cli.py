@@ -31,12 +31,15 @@ def play_sound():
             print("\a", end="", flush=True)
     except Exception:
         # Fallback to terminal bell
-        print("\a", end="", flush=True)
+        print("\a", end="", flush=True) 
 
 
-def countdown(t, label, activity_name=None, comment=""):
+def countdown(t, label, activity_name=None, comment="", endless=False):
     """Displays a countdown timer with pause and exit functionality."""
-    print(f"{label}: Starting... (p:pause, l:log&exit, q:quit)", end="\r")
+    if endless:
+        print(f"{label}: Starting endless session... (p:pause, l:log&exit, q:quit)", end="\r")
+    else:
+        print(f"{label}: Starting... (p:pause, l:log&exit, q:quit)", end="\r")
 
     initial_t = t
     # Save original terminal settings
@@ -44,11 +47,16 @@ def countdown(t, label, activity_name=None, comment=""):
     try:
         tty.setcbreak(sys.stdin.fileno())
 
-        while t > 0:
-            mins, secs = divmod(t, 60)
-            remaining_timer = "{:02d}:{:02d}".format(mins, secs)
+        elapsed_seconds = 0
+        while endless or t > 0:
+            if not endless:
+                mins, secs = divmod(t, 60)
+                remaining_timer = "{:02d}:{:02d}".format(mins, secs)
+                elapsed = initial_t - t
+            else:
+                remaining_timer = "Endless"
+                elapsed = elapsed_seconds
 
-            elapsed = initial_t - t
             e_mins, e_secs = divmod(elapsed, 60)
             elapsed_timer = "{:02d}:{:02d}".format(e_mins, e_secs)
 
@@ -83,8 +91,8 @@ def countdown(t, label, activity_name=None, comment=""):
                                 break
 
                 if key.lower() == "l":
-                    elapsed_seconds = initial_t - t
-                    elapsed_minutes = elapsed_seconds / 60
+                    total_elapsed = elapsed_seconds if endless else (initial_t - t)
+                    elapsed_minutes = total_elapsed / 60
                     print(f"\nExiting... Session logged: {elapsed_minutes:.2f} min")
                     if activity_name:
                         database.log_session(activity_name, elapsed_minutes, comment)
@@ -95,8 +103,11 @@ def countdown(t, label, activity_name=None, comment=""):
                     sys.exit(0)
 
             else:
-                # Timeout reached, decrement timer
-                t -= 1
+                # Timeout reached, decrement/increment timer
+                if endless:
+                    elapsed_seconds += 1
+                else:
+                    t -= 1
     finally:
         # Restore terminal settings
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
@@ -128,6 +139,14 @@ def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activit
     print("prodzCLI session finished!")
 
 
+def start_endless(activity, comment=""):
+    """Starts an endless prodzCLI session."""
+    database.init_db()
+    print(f"--- Endless Session ---")
+    print(f"Starting work session: {activity}")
+    countdown(0, "Work", activity, comment, endless=True)
+
+
 def input_safe_int(prompt, default):
     try:
         val = input(f"{prompt} [{default}]: ").strip()
@@ -141,8 +160,9 @@ def show_menu():
         print("\n--- Prodz CLI Menu ---")
         print("1. Start Default Session (25/5)")
         print("2. Start Custom Session")
-        print("3. View Statistics")
-        print("4. Quit")
+        print("3. Start Endless Session")
+        print("4. View Statistics")
+        print("5. Quit")
 
         choice = input("Enter choice: ").strip()
 
@@ -159,12 +179,16 @@ def show_menu():
             c = input_safe_int("Cycles", 4)
             start_prodz(w, b, lb, c, activity, comment)
         elif choice == "3":
+            activity = input("Activity name [endless]: ").strip() or "endless"
+            comment = input("Comment [optional]: ").strip()
+            start_endless(activity, comment)
+        elif choice == "4":
             try:
                 data = plot.get_data()
                 plot.draw_chart(data)
             except Exception as e:
                 print(f"Error showing stats: {e}")
-        elif choice == "4":
+        elif choice == "5":
             print("Goodbye!")
             sys.exit(0)
         else:
@@ -218,15 +242,24 @@ if __name__ == "__main__":
             default="",
             help="Short comment about the activity",
         )
+        parser.add_argument(
+            "-e",
+            "--endless",
+            action="store_true",
+            help="Start an endless session",
+        )
         args = parser.parse_args()
 
-        start_prodz(
-            args.work,
-            getattr(args, "break"),
-            args.long_break,
-            args.cycles,
-            args.activity,
-            args.text,
-        )
+        if args.endless:
+            start_endless(args.activity, args.text)
+        else:
+            start_prodz(
+                args.work,
+                getattr(args, "break"),
+                args.long_break,
+                args.cycles,
+                args.activity,
+                args.text,
+            )
     else:
         show_menu()
