@@ -1,10 +1,26 @@
 import sqlite3
 import datetime
+import subprocess
 
 DB_NAME = "prodz.db"
 
+def pull_db():
+    try:
+        subprocess.run(["git", "pull"], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        pass
+
+def sync_db():
+    try:
+        subprocess.run(["git", "add", DB_NAME], check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "update"], check=True, capture_output=True)
+        subprocess.run(["git", "push"], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        pass
+
 def init_db():
     """Initializes the database and creates the table if it doesn't exist."""
+    pull_db()
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -23,9 +39,11 @@ def init_db():
         pass
     conn.commit()
     conn.close()
+    sync_db()
 
 def log_session(activity, duration, comment=""):
     """Logs a completed work session to the database."""
+    pull_db()
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
@@ -41,3 +59,5 @@ def log_session(activity, duration, comment=""):
     conn.commit()
     conn.close()
     print(f"Logged session for '{activity}' to database.")
+    sync_db()
+
