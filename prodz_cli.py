@@ -211,14 +211,14 @@ if __name__ == "__main__":
             "-b",
             "--break",
             type=int,
-            default=5,
+            default=3,
             help="Short break duration in minutes (default: 5)",
         )
         parser.add_argument(
             "-lb",
             "--long-break",
             type=int,
-            default=15,
+            default=6,
             help="Long break duration in minutes (default: 15)",
         )
         parser.add_argument(
