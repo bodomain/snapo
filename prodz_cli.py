@@ -211,7 +211,7 @@ if __name__ == "__main__":
             "-b",
             "--break",
             type=int,
-            default=3,
+            default=2,
             help="Short break duration in minutes (default: 5)",
         )
         parser.add_argument(
