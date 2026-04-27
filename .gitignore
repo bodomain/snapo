@@ -2,6 +2,7 @@
 
 #prodz.db*
 
+*.pem 
 # Python
 __pycache__/
 *.py[cod]
