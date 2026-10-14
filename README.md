@@ -1,6 +1,6 @@
 # prodzCLI
 
-A simple, lightweight, and customizable productivity timer for the command line, written in Python. It helps you manage your time (using the Pomodoro Technique), tracks your activities, and visualizes your daily productivity.
+A simple, lightweight, and customizable productivity timer for the command line, written in Python. It helps you manage your time (using the Pomodoro Technique), tracks your activities, and visualizes your daily productivity. Session data stays in the local `prodz.db` file and syncs with Turso when online.
 
 ## Features
 
@@ -9,11 +9,12 @@ A simple, lightweight, and customizable productivity timer for the command line,
 -   **Interactive Controls:** Pause, resume, or exit sessions directly from the terminal.
 -   **Notification Sounds:** Plays a notification sound (`bell.wav`) at the end of each session using system audio tools (`aplay`, `paplay`, or `ffplay`). Falls back to the terminal bell if audio is unavailable.
 -   **Statistics Visualization:** View a simple ASCII bar chart of your daily productivity directly in the CLI.
--   **Zero Dependencies:** Built using Python's standard library (no `pip install` required).
+-   **Offline Support:** Session data remains available locally when Turso cannot be reached and syncs on a later run.
 
 ## Prerequisites
 
--   **Python 3.6+**
+-   **Python 3.10+**
+-   **Python package:** Install dependencies with `pip install -r requirements.txt`.
 -   **Linux** (Uses `termios`/`tty` for input handling and system tools for audio)
 -   **Audio Player:** One of `aplay` (ALSA), `paplay` (PulseAudio), or `ffplay` (FFmpeg) should be installed on your system for sound notifications.
 
@@ -25,6 +26,40 @@ A simple, lightweight, and customizable productivity timer for the command line,
     cd snapo
     ```
 3.  Ensure `prodz_cli.py` and `bell.wav` are in the same directory.
+4.  Configure `.env` with `TURSO_AUTH_TOKEN=<your token>`, or keep the token as the only line in `.env`. The database URL is configured in `database.py`.
+5.  Install dependencies and activate the project environment:
+    ```bash
+    uv venv .venv
+    uv pip install --python .venv/bin/python -r requirements.txt
+    source .venv/bin/activate
+    ```
+
+The replica needs an initial online connection. After that, offline writes are
+tracked locally and retried when the app next initializes, logs a session, or
+reads the chart. Use the activated environment, or launch with
+`.venv/bin/python prodz_cli.py` and `.venv/bin/python plot.py`.
+
+The background worker uploads queued app changes and pulls remote changes every
+15 seconds, including while the timer is closed. App saves also attempt an
+immediate upload. The worker retries automatically after connection failures.
+Install the user service on this machine with:
+
+```bash
+systemctl --user link /home/user/Desktop/snapo/prodz-sync.service
+systemctl --user enable --now prodz-sync.service
+```
+
+The service starts at login and runs while your user session is active. To check
+or stop it, use `systemctl --user status prodz-sync.service` or
+`systemctl --user disable --now prodz-sync.service`. Logs are available with
+`journalctl --user -u prodz-sync.service`. If the project moves, update the paths
+in `prodz-sync.service` and reload the service configuration.
+
+For a manual sync, run `.venv/bin/python sync_db.py --once`. Foreground monitoring
+is available with `.venv/bin/python sync_db.py --interval 15`.
+
+For changes that should sync, write through the app's Turso connection. Direct
+edits using `sqlite3` bypass sync change tracking and are not uploaded.
 
 ## Usage
 

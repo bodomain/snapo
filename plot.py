@@ -1,7 +1,5 @@
-import sqlite3
 import shutil
-
-DB_NAME = "prodz.db"
+import database
 
 # ANSI Colors for terminal output
 COLORS = [
@@ -22,17 +20,7 @@ RESET = "\033[0m"
 DIM = "\033[2m"
 
 def get_data():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    # Fetch individual sessions
-    cursor.execute('''
-        SELECT date, activity, duration_minutes 
-        FROM sessions 
-        ORDER BY date ASC
-    ''')
-    data = cursor.fetchall()
-    conn.close()
-    return data
+    return database.get_sessions()
 
 def draw_chart(data):
     if not data:
@@ -114,5 +102,5 @@ if __name__ == "__main__":
     try:
         data = get_data()
         draw_chart(data)
-    except sqlite3.OperationalError:
-        print("Database not found or empty. Run a prodzCLI session first.")
+    except Exception as error:
+        print(f"Could not read the database: {error}")

@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep the prodz database synced with Turso
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/Desktop/snapo
+ExecStart=/home/user/Desktop/snapo/.venv/bin/python -u /home/user/Desktop/snapo/sync_db.py
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

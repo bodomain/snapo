@@ -1,6 +1,14 @@
 # Databases
 
 #prodz.db*
+#
+.env
+prodz.db-changes
+prodz.db-info
+prodz.db-wal
+prodz.db-wal-revert
+prodz.db-shm
+prodz.db.lock
 
 *.pem
 # Python
