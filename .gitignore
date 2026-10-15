@@ -1,24 +1,17 @@
-# Databases
-
-#prodz.db*
-#
+# Runtime data stays on each computer; bootstrap replicas from Turso.
+*.db
+*.db-*
+*.db.*
+backups/
 .env
-prodz.db-changes
-prodz.db-info
-prodz.db-wal
-prodz.db-wal-revert
-prodz.db-shm
-prodz.db.lock
-
 *.pem
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
 .venv/
 venv/
 ENV/
-
-# OS files
+.pytest_cache/
+.coverage
+htmlcov/
 .DS_Store
 Thumbs.db

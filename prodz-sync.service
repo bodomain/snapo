@@ -1,3 +1,5 @@
+# Existing installation compatibility. For any checkout location, generate and
+# install the correct unit with: .venv/bin/python install_service.py --install
 [Unit]
 Description=Keep the prodz database synced with Turso
 

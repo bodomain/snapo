@@ -1,121 +1,54 @@
-import time
 import argparse
-import subprocess
-import shutil
 import database
 import sys
 import select
 import termios
 import tty
 import plot
-
-
-def play_sound():
-    """Plays a notification sound using system tools."""
-    sound_file = "bell.wav"
-    try:
-        # Check for available players
-        if shutil.which("aplay"):
-            subprocess.run(["aplay", "-q", sound_file], check=False)
-        elif shutil.which("paplay"):
-            subprocess.run(["paplay", sound_file], check=False)
-        elif shutil.which("ffplay"):
-            subprocess.run(
-                ["ffplay", "-nodisp", "-autoexit", sound_file],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        else:
-            # Fallback to terminal bell
-            print("\a", end="", flush=True)
-    except Exception:
-        # Fallback to terminal bell
-        print("\a", end="", flush=True) 
+from timer import Timer
+from notifications import play_sound
 
 
 def countdown(t, label, activity_name=None, comment="", endless=False):
-    """Displays a countdown timer with pause and exit functionality."""
-    if endless:
-        print(f"{label}: Starting endless session... (p:pause, l:log&exit, q:quit)", end="\r")
-    else:
-        print(f"{label}: Starting... (p:pause, l:log&exit, q:quit)", end="\r")
-
-    initial_t = t
-    # Save original terminal settings
+    """Terminal adapter for the shared monotonic timer."""
+    timer = Timer(None if endless else t, activity=activity_name or label, comment=comment)
     old_settings = termios.tcgetattr(sys.stdin)
+    outcome = "complete"
     try:
         tty.setcbreak(sys.stdin.fileno())
-
-        elapsed_seconds = 0
-        while endless or t > 0:
-            if not endless:
-                mins, secs = divmod(t, 60)
-                remaining_timer = "{:02d}:{:02d}".format(mins, secs)
-                elapsed = initial_t - t
-            else:
-                remaining_timer = "Endless"
-                elapsed = elapsed_seconds
-
-            e_mins, e_secs = divmod(elapsed, 60)
-            elapsed_timer = "{:02d}:{:02d}".format(e_mins, e_secs)
-
-            print(
-                f"{label}: time: {elapsed_timer}    remaining: {remaining_timer}          ",
-                end="\r",
-            )
-
-            # Wait for input or timeout (1 second)
-            rlist, _, _ = select.select([sys.stdin], [], [], 1)
-
-            if rlist:
-                key = sys.stdin.read(1)
-                if key.lower() == "p":
-                    print(f"\r{label}: PAUSED (p:resume, q:quit)   ", end="")
-                    while True:
-                        # Wait indefinitely for input when paused
-                        rlist_paused, _, _ = select.select([sys.stdin], [], [])
-                        if rlist_paused:
-                            key_paused = sys.stdin.read(1)
-                            if key_paused.lower() == "p":
-                                print(
-                                    f"\r{label}: Resuming...                  ", end=""
-                                )
-                                break
-                            elif key_paused.lower() == "q":
-                                key = "q"
-                                break
-                            elif key_paused.lower() == "l":
-                                # Handle exit from pause state
-                                key = "l"
-                                break
-
-                if key.lower() == "l":
-                    total_elapsed = elapsed_seconds if endless else (initial_t - t)
-                    elapsed_minutes = total_elapsed / 60
-                    print(f"\nExiting... Session logged: {elapsed_minutes:.2f} min")
-                    if activity_name:
-                        database.log_session(activity_name, elapsed_minutes, comment)
-                    sys.exit(0)
-
-                if key.lower() == "q":
-                    print("\nQuitting without logging...")
-                    sys.exit(0)
-
-            else:
-                # Timeout reached, decrement/increment timer
-                if endless:
-                    elapsed_seconds += 1
-                else:
-                    t -= 1
+        while endless or not timer.complete:
+            elapsed = int(timer.elapsed)
+            remaining = "Endless" if timer.remaining is None else f"{int(timer.remaining) // 60:02d}:{int(timer.remaining) % 60:02d}"
+            state = "PAUSED" if timer.paused else label
+            print(f"\r{state}: {elapsed // 60:02d}:{elapsed % 60:02d} remaining {remaining}  p:pause l:save q:discard    ", end="", flush=True)
+            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+            if not ready:
+                continue
+            key = sys.stdin.read(1).lower()
+            if key == "p":
+                timer.resume() if timer.paused else timer.pause()
+            elif key in {"l", "q"}:
+                outcome = key
+                break
     finally:
-        # Restore terminal settings
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-        print()  # Ensure newline after loop
+        print()
+    if outcome == "q":
+        timer.discard()
+        raise SystemExit(0)
+    if activity_name:
+        save = timer.save()
+        if save:
+            database.Store().create(save.session, session_id=save.session_id)
+            print(f"Saved {save.session.duration_minutes:.2f} minutes locally.")
+    if outcome == "l":
+        raise SystemExit(0)
 
 
 def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activity, comment=""):
     """Starts the prodzCLI timer."""
+    if min(work_minutes, break_minutes, long_break_minutes, cycles) <= 0:
+        raise ValueError("Durations and cycles must be positive")
     database.init_db()
     for i in range(cycles):
         print(f"--- Cycle {i + 1}/{cycles} ---")
@@ -123,8 +56,9 @@ def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activit
         countdown(work_minutes * 60, "Work", activity, comment)
         print("\nWork session complete!")
         play_sound()
-        database.log_session(activity, work_minutes, comment)
 
+        if i + 1 == cycles:
+            break
         if (i + 1) % 4 == 0:
             print("Starting long break...")
             countdown(long_break_minutes * 60, "Long Break")
@@ -211,14 +145,14 @@ if __name__ == "__main__":
             "-b",
             "--break",
             type=int,
-            default=1,
+            default=5,
             help="Short break duration in minutes (default: 5)",
         )
         parser.add_argument(
             "-lb",
             "--long-break",
             type=int,
-            default=6,
+            default=15,
             help="Long break duration in minutes (default: 15)",
         )
         parser.add_argument(

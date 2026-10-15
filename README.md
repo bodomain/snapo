@@ -1,129 +1,199 @@
-# prodzCLI
+# Snapo
 
-A simple, lightweight, and customizable productivity timer for the command line, written in Python. It helps you manage your time (using the Pomodoro Technique), tracks your activities, and visualizes your daily productivity. Session data stays in the local `prodz.db` file and syncs with Turso when online.
+A personal Linux productivity timer and session workspace. The Textual TUI
+combines a timer, editable history, daily/weekly reports, CSV export, Trash, and
+conflict review. Each computer has its own local Turso replica; session history
+syncs through your Turso database. Active timers remain local.
 
-## Features
+## Install and try it
 
--   **Customizable Timers:** Set your own durations for work sessions, short breaks, and long breaks.
--   **Activity Tracking:** Log your sessions (activity name, duration, date) to a local SQLite database.
--   **Interactive Controls:** Pause, resume, or exit sessions directly from the terminal.
--   **Notification Sounds:** Plays a notification sound (`bell.wav`) at the end of each session using system audio tools (`aplay`, `paplay`, or `ffplay`). Falls back to the terminal bell if audio is unavailable.
--   **Statistics Visualization:** View a simple ASCII bar chart of your daily productivity directly in the CLI.
--   **Offline Support:** Session data remains available locally when Turso cannot be reached and syncs on a later run.
-
-## Prerequisites
-
--   **Python 3.10+**
--   **Python package:** Install dependencies with `pip install -r requirements.txt`.
--   **Linux** (Uses `termios`/`tty` for input handling and system tools for audio)
--   **Audio Player:** One of `aplay` (ALSA), `paplay` (PulseAudio), or `ffplay` (FFmpeg) should be installed on your system for sound notifications.
-
-## Installation
-
-1.  Clone this repository or download the source code.
-2.  Navigate to the project directory:
-    ```bash
-    cd snapo
-    ```
-3.  Ensure `prodz_cli.py` and `bell.wav` are in the same directory.
-4.  Configure `.env` with `TURSO_AUTH_TOKEN=<your token>`, or keep the token as the only line in `.env`. The database URL is configured in `database.py`.
-5.  Install dependencies and activate the project environment:
-    ```bash
-    uv venv .venv
-    uv pip install --python .venv/bin/python -r requirements.txt
-    source .venv/bin/activate
-    ```
-
-The replica needs an initial online connection. After that, offline writes are
-tracked locally and retried when the app next initializes, logs a session, or
-reads the chart. Use the activated environment, or launch with
-`.venv/bin/python prodz_cli.py` and `.venv/bin/python plot.py`.
-
-The background worker uploads queued app changes and pulls remote changes every
-15 seconds, including while the timer is closed. App saves also attempt an
-immediate upload. The worker retries automatically after connection failures.
-Install the user service on this machine with:
+Requires Python 3.10+ and a Linux terminal. A terminal at least 100×30 works best.
 
 ```bash
-systemctl --user link /home/user/Desktop/snapo/prodz-sync.service
-systemctl --user enable --now prodz-sync.service
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+# Try the complete interface against separate local-only demo data:
+.venv/bin/python app.py --local --db /tmp/snapo-demo.db
 ```
 
-The service starts at login and runs while your user session is active. To check
-or stop it, use `systemctl --user status prodz-sync.service` or
-`systemctl --user disable --now prodz-sync.service`. Logs are available with
-`journalctl --user -u prodz-sync.service`. If the project moves, update the paths
-in `prodz-sync.service` and reload the service configuration.
-
-For a manual sync, run `.venv/bin/python sync_db.py --once`. Foreground monitoring
-is available with `.venv/bin/python sync_db.py --interval 15`.
-
-For changes that should sync, write through the app's Turso connection. Direct
-edits using `sqlite3` bypass sync change tracking and are not uploaded.
-
-## Usage
-
-Run the timer using Python:
+For synced use, copy `.env.example` to `.env` and set your database URL, token,
+and absolute local database path. Environment variables override `.env` values.
+The old one-line token file is still supported. `.env` is loaded from the project
+directory, so launching from another directory works.
 
 ```bash
-python prodz_cli.py [options]
+.venv/bin/python app.py
+# Or choose this computer's local replica explicitly:
+.venv/bin/python app.py --db /absolute/path/to/prodz.db
 ```
 
-### Command-line Arguments
+The first connection needs internet access to bootstrap a replica. Later local
+reads and saves work offline; the TUI attempts sync after saves and every 15
+seconds. Missing credentials never silently switch a Turso replica to plain
+SQLite. `--local` requires an explicit database path and refuses replica files.
 
-| Argument | Long Flag | Description | Default |
-| :--- | :--- | :--- | :--- |
-| `-w` | `--work` | Duration of the work session (minutes) | 25 |
-| `-b` | `--break` | Duration of the short break (minutes) | 5 |
-| `-lb` | `--long-break` | Duration of the long break (minutes) | 15 |
-| `-c` | `--cycles` | Number of work cycles before a long break/finish | 4 |
-| `-a` | `--activity` | Name of the activity/task being tracked | "whatever" |
-| `-t` | `--text` | Short comment about the activity | "" |
-| `-h` | `--help` | Show the help message and exit | - |
+## Workspace
 
-### Interactive Controls
+- **Timer:** activity/comment, work and break durations, cycle count, endless
+  mode, pause/resume, save/stop, and discard. Pauses do not count toward work.
+  Completed work saves once; breaks produce no session. A long break follows
+  every fourth work cycle if more cycles remain. The final cycle ends without
+  an extra break. Closing with Ctrl+Q or Ctrl+C prompts to save, discard, or
+  cancel. Work and break completion play `bell.wav` in the background,
+  with terminal bell fallback. A failed save retains the timer for retry. Terminal/process crashes
+  do not preserve an active timer.
+- **History:** browse timestamps through the editor, search activity/comments/
+  timestamps, filter activity and an inclusive date range, add/edit sessions,
+  or move them to Trash. History and report exports use the History filters.
+- **Reports:** daily and ISO-week totals by activity. Days follow each session's
+  recorded date, including when viewed from another timezone. Deleted sessions
+  and unresolved conflicts do not contribute to totals.
+- **Trash:** deletion syncs as a reversible revision. Restore a selected session
+  to return it to history on all computers. There is no permanent-delete action.
+- **Conflicts:** concurrent offline edits, including delete-versus-edit, retain
+  all versions. Choose a version as a starting point or correct its fields,
+  choose active/Trash state, then save to resolve the displayed versions.
+  A newer edit arriving while a form is open requires reopening the form.
+- **Sync status:** last successful sync, queued operations, and connectivity
+  errors. “Saved locally” does not mean “uploaded.” Pending operations count
+  driver operations, not sessions. Local-only mode is labeled explicitly.
 
-While the timer is running, you can use the following keys:
+Shortcuts: **Ctrl+N** add, **Ctrl+E** edit selected history row, **Ctrl+D** move to
+Trash, **Ctrl+R** restore selected Trash row, **Ctrl+S** sync, **F5** reload,
+**F2** pause/resume, **Ctrl+Q** quit. Buttons provide the same actions. Standard
+Tab/Shift+Tab navigation works in forms. Escape cancels a dialog.
 
--   **`p`**: **Pause** or **Resume** the timer.
--   **`l`**: **Log & Exit**. Stops the timer, saves the elapsed time to the database, and exits.
--   **`q`**: **Quit**. Exits the application immediately *without* saving the session.
+CSV exports contain active, non-conflicted sessions, include IDs and timestamps,
+and refuse to overwrite existing files. Free-text spreadsheet formula prefixes
+are escaped with an apostrophe. Exports are not a database backup.
 
-### Example
+## Upgrade an existing database
 
-Start a session for "Python Study" with 45-minute work intervals:
+Revision history is a schema change. Old clients cannot safely write alongside
+new ones. Perform the migration once from one designated computer, then
+bootstrap fresh replicas on your other computers.
+
+1. Stop the old timer and sync worker **on every computer**:
+
+   ```bash
+   systemctl --user stop prodz-sync.service
+   ```
+
+2. Configure the designated computer to use the existing database. Check the
+   migration; the default command does not apply schema changes or upload data:
+
+   ```bash
+   .venv/bin/python migrate_db.py
+   ```
+
+3. Resolve any reported legacy record or metadata differences before proceeding.
+   The check compares local records with an independently bootstrapped remote
+   replica. Matching records are preserved; local-only and remote-only records
+   are included in the merge. A conflicting ID stops migration instead of
+   choosing a winner. A damaged replica must be recovered separately.
+
+4. Apply after all old clients are stopped:
+
+   ```bash
+   .venv/bin/python migrate_db.py --apply --old-clients-stopped
+   ```
+
+   Before applying, it backs up the database and its sidecars to
+   `backups/migration-<timestamp>/`. It preserves the original `sessions` table
+   and other metadata, imports deterministic revision/session IDs from one
+   shared dataset UUID, uploads the revisions, and verifies remote contents.
+   Repeating a completed migration does not duplicate sessions. If upload or
+   verification fails, keep the backup, fix connectivity, rerun the same migration command to retry upload and independent remote
+   verification before cutover. Never restore an old
+   replica over an active revised database.
+
+5. Start the TUI and replace the background service with one generated for your
+   current checkout and Python environment:
+
+   ```bash
+   .venv/bin/python install_service.py          # preview the unit
+   .venv/bin/python install_service.py --install
+   .venv/bin/python app.py
+   ```
+
+For local-only legacy files use `--local --db /path/to/file.db` on migration
+commands. Never use plain SQLite to modify a Turso replica.
+
+## Additional computers
+
+Install the same version, configure the same Turso URL with an appropriate
+credential, and choose a **new local database path**. Start `app.py` online;
+it bootstraps the shared revision history. Install the generated background
+service if you want sync while the TUI is closed.
+
+Do not copy a running replica, its sidecar files, or its `.device.json` identity
+between computers. Do not migrate independently from a second old replica.
+Reconcile any remaining old local-only data before bootstrap. Runtime databases,
+sidecars, identities, status, backups, and credentials must stay out of Git.
+Previously tracked database files need to be untracked explicitly during rollout;
+ignore rules alone do not remove files from Git history.
+
+## Background synchronization
 
 ```bash
-python prodz_cli.py -w 45 -a "Python Study"
+.venv/bin/python sync_db.py --once
+.venv/bin/python sync_db.py --interval 15
+systemctl --user status prodz-sync.service
+journalctl --user -u prodz-sync.service
+systemctl --user disable --now prodz-sync.service
 ```
 
-## Statistics
+The service starts at login and runs during your user session. It serializes
+access with other clients on that computer, retries network failures, and writes
+status beside the replica. It does not replace or reset damaged replicas.
+Regenerate/reinstall the unit if the project or environment moves. The TUI
+also syncs when open; cross-process locking serializes both callers.
 
-Your completed sessions (and partially completed ones logged via `x`) are stored in `prodz.db`. To view a graph of your daily productivity:
+The checked-in `prodz-sync.service` retains compatibility with the original
+checkout location. Use `install_service.py` for a portable installation.
+
+## Existing CLI
 
 ```bash
-python plot.py
+.venv/bin/python prodz_cli.py -w 25 -b 5 -lb 15 -c 4 -a 'Python study' -t 'Chapter 2'
+.venv/bin/python prodz_cli.py --endless -a 'Reading'
+.venv/bin/python plot.py
 ```
 
-**Output Example:**
+The CLI now uses the same monotonic timer and revision-backed session store.
+Press `p` to pause/resume, `l` to save and exit, or `q` to discard and exit.
+It queues local writes; use the background worker for uploads while it is closed.
+Set `SNAPO_LOCAL=1` and `SNAPO_DB_PATH` for a separate local-only CLI database.
+Sound notifications use `aplay`, `paplay`, or `ffplay`, with terminal bell fallback.
 
-```text
-Daily Activity (Duration in Minutes)
+## Development and validation
 
-2023-10-27 | ████████████ 120.00m
-2023-10-28 | ██████ 60.50m
-2023-10-29 | ██████████████████ 180.00m
+```bash
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python -m pytest
 ```
 
-## Project Structure
+Tests cover monotonic timing, partial and idempotent saves, actual Turso engine
+SQL compatibility, immutable revision convergence in both delivery orders,
+concurrent resolutions, Trash/restore, filters, CSV, migration/backup, and TUI
+keyboard/mouse workflows. Every default test uses temporary local data.
 
--   `prodz_cli.py`: Main application logic.
--   `database.py`: Handles SQLite database operations.
--   `plot.py`: Generates the statistics chart.
--   `bell.wav`: Notification sound file.
--   `prodz.db`: (Created on first run) Stores session data.
+Cloud transport acceptance tests are opt-in and never load the project's token.
+Provide credentials for a **separate disposable database**, then run:
 
-## License
+```bash
+# Set these securely in your environment, not in committed files:
+# SNAPO_TEST_TURSO_URL, SNAPO_TEST_TURSO_TOKEN
+SNAPO_TEST_REMOTE_OK=1 .venv/bin/python -m pytest -m remote
+```
 
-Free to use and modify.# snapo
-# snapo
+These tests create real history in the disposable database. They exercise two
+independent replicas, offline edits, delete conflicts, resolution, restoration,
+reopening, and both synchronization orders. Delete the disposable database
+through your Turso account afterward. Without credentials they skip, so local
+passes alone do not certify the cloud transport.
+
+The shared modules are `timer.py` (timekeeping), `sessions.py` (revision history,
+conflicts, reports, exports), and `database.py` (local operations and transport).
+A future desktop app can use the same operations. Desktop/tray integration,
+active-timer handoff, mobile access, and multi-user sharing are deferred.
