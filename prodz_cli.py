@@ -1,22 +1,82 @@
 import argparse
 import database
+import json
+import os
+import signal
 import sys
 import select
 import termios
+import threading
 import tty
+from pathlib import Path
 import plot
 from timer import Timer
 from notifications import play_sound
 
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "prodz"
 
-def countdown(t, label, activity_name=None, comment="", endless=False):
+_active_timer = None
+_session_saved = False
+
+
+def _sync_after_save():
+    """Best-effort background sync; never blocks the timer or Waybar."""
+    try:
+        database.sync_once()
+    except Exception:
+        pass
+
+
+def _state_file():
+    """Location of the live session snapshot; PRODZ_STATE_FILE overrides it."""
+    override = os.environ.get("PRODZ_STATE_FILE")
+    return Path(override) if override else STATE_DIR / "session.json"
+
+
+def _on_pause_signal(signum, frame):
+    """SIGUSR1 toggles pause/resume, e.g. from a Waybar module click."""
+    if _active_timer is not None and not _active_timer.finished:
+        _active_timer.resume() if _active_timer.paused else _active_timer.pause()
+
+
+def _write_state(phase, timer, cycle, cycles):
+    """Exports a live session snapshot for external tools such as Waybar."""
+    state = {
+        "phase": phase,
+        "state": "paused" if timer.paused else "running",
+        "activity": timer.activity,
+        "comment": timer.comment,
+        "cycle": cycle,
+        "cycles": cycles,
+        "elapsed": round(timer.elapsed, 1),
+        "remaining": None if timer.remaining is None else round(timer.remaining, 1),
+        "endless": timer.seconds is None,
+        "started_at": timer.started_at.isoformat(),
+        "pid": os.getpid(),
+    }
+    path = _state_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(state))
+    temp.replace(path)
+
+
+def _clear_state():
+    _state_file().unlink(missing_ok=True)
+
+
+def countdown(t, label, activity_name=None, comment="", endless=False, cycle=1, cycles=1):
     """Terminal adapter for the shared monotonic timer."""
+    global _active_timer
     timer = Timer(None if endless else t, activity=activity_name or label, comment=comment)
+    _active_timer = timer
+    signal.signal(signal.SIGUSR1, _on_pause_signal)
     old_settings = termios.tcgetattr(sys.stdin)
     outcome = "complete"
     try:
         tty.setcbreak(sys.stdin.fileno())
         while endless or not timer.complete:
+            _write_state(label, timer, cycle, cycles)
             elapsed = int(timer.elapsed)
             remaining = "Endless" if timer.remaining is None else f"{int(timer.remaining) // 60:02d}:{int(timer.remaining) % 60:02d}"
             state = "PAUSED" if timer.paused else label
@@ -31,6 +91,7 @@ def countdown(t, label, activity_name=None, comment="", endless=False):
                 outcome = key
                 break
     finally:
+        _active_timer = None
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
         print()
     if outcome == "q":
@@ -41,6 +102,9 @@ def countdown(t, label, activity_name=None, comment="", endless=False):
         if save:
             database.Store().create(save.session, session_id=save.session_id)
             print(f"Saved {save.session.duration_minutes:.2f} minutes locally.")
+            global _session_saved
+            _session_saved = True
+            threading.Thread(target=_sync_after_save, daemon=True).start()
     if outcome == "l":
         raise SystemExit(0)
 
@@ -50,27 +114,37 @@ def start_prodz(work_minutes, break_minutes, long_break_minutes, cycles, activit
     if min(work_minutes, break_minutes, long_break_minutes, cycles) <= 0:
         raise ValueError("Durations and cycles must be positive")
     database.init_db()
-    for i in range(cycles):
-        print(f"--- Cycle {i + 1}/{cycles} ---")
-        print(f"Starting work session: {activity}")
-        countdown(work_minutes * 60, "Work", activity, comment)
-        print("\nWork session complete!")
-        play_sound()
-
-        if i + 1 == cycles:
-            break
-        if (i + 1) % 4 == 0:
-            print("Starting long break...")
-            countdown(long_break_minutes * 60, "Long Break")
-            print("\nLong break complete!")
-            play_sound()
-        else:
-            print("Starting short break...")
-            countdown(break_minutes * 60, "Break")
-            print("\nBreak complete!")
+    try:
+        for i in range(cycles):
+            print(f"--- Cycle {i + 1}/{cycles} ---")
+            print(f"Starting work session: {activity}")
+            countdown(work_minutes * 60, "Work", activity, comment,
+                      cycle=i + 1, cycles=cycles)
+            print("\nWork session complete!")
             play_sound()
 
-    print("prodzCLI session finished!")
+            if i + 1 == cycles:
+                break
+            if (i + 1) % 4 == 0:
+                print("Starting long break...")
+                countdown(long_break_minutes * 60, "Long Break",
+                          cycle=i + 1, cycles=cycles)
+                print("\nLong break complete!")
+                play_sound()
+            else:
+                print("Starting short break...")
+                countdown(break_minutes * 60, "Break",
+                          cycle=i + 1, cycles=cycles)
+                print("\nBreak complete!")
+                play_sound()
+
+        print("prodzCLI session finished!")
+    finally:
+        if _session_saved:
+            worker = threading.Thread(target=_sync_after_save, daemon=True)
+            worker.start()
+            worker.join(timeout=5)
+        _clear_state()
 
 
 def start_endless(activity, comment=""):
@@ -78,7 +152,14 @@ def start_endless(activity, comment=""):
     database.init_db()
     print(f"--- Endless Session ---")
     print(f"Starting work session: {activity}")
-    countdown(0, "Work", activity, comment, endless=True)
+    try:
+        countdown(0, "Work", activity, comment, endless=True)
+    finally:
+        if _session_saved:
+            worker = threading.Thread(target=_sync_after_save, daemon=True)
+            worker.start()
+            worker.join(timeout=5)
+        _clear_state()
 
 
 def input_safe_int(prompt, default):

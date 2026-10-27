@@ -15,7 +15,7 @@ def unit(project, python, db, *, local=False):
     if local:
         command += " --local"
     return f'''[Unit]
-Description=Snapo background database sync
+Description=Aftermath background database sync
 
 [Service]
 Type=simple

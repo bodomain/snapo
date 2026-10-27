@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Unified command line for the prodz session store.
+
+Subcommands:
+  timer   Run the interactive/focus timer (delegates to prodz_cli.py).
+  history List sessions (active, trash or conflicts).
+  show    Show one session and its revision history.
+  trash   Move a session to the trash.
+  restore Restore a trashed session.
+  report  Print totals per activity.
+  export  Export sessions as CSV.
+  sync    Sync with Turso now.
+  status  Show sync status and pending operations.
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+from database import Config, Store, sync_once
+from sessions import filtered, totals, export_csv
+
+
+def _store(db=None):
+    if db:
+        store = Store(Config.load(db, local=True))
+    else:
+        store = Store()
+    store.initialize()
+    return store
+
+
+def _short(value, width):
+    value = str(value or "")
+    return value if len(value) <= width else value[: width - 1] + "\u2026"
+
+
+def cmd_timer(args):
+    script = Path(__file__).with_name("prodz_cli.py")
+    try:
+        idx = sys.argv.index("timer")
+        remainder = sys.argv[idx + 1:]
+    except ValueError:
+        remainder = []
+    return subprocess.call([sys.executable, str(script), *remainder])
+
+
+def cmd_history(args):
+    store = _store(getattr(args, "db", None))
+    entries = filtered(store.entries(), search=args.search or "", activity=args.activity or "",
+                      since=args.since or "", until=args.until or "", view=args.view)
+    if not entries:
+        print("No sessions.")
+        return
+    print(f"{'Date':<12}{'Activity':<20}{'Min':>7}  {'State':<10} Comment")
+    print("-" * 70)
+    for entry in entries:
+        session = entry.current.session
+        state = "conflict" if entry.conflicted else ("trashed" if entry.current.deleted else "active")
+        print(f"{session.date:<12}{_short(session.activity, 19):<20}{session.duration_minutes:>7.2f}  {state:<10} {session.comment}")
+    print()
+    print(f"{len(entries)} session(s)")
+
+
+def cmd_show(args):
+    store = _store(getattr(args, "db", None))
+    entries = store.entries()
+    entry = next((e for e in entries if e.session_id == args.session_id), None)
+    if entry is None:
+        raise SystemExit(f"Session not found: {args.session_id}")
+    session = entry.current.session
+    print(f"Session:   {entry.session_id}")
+    print(f"Date:      {session.date}")
+    print(f"Activity:  {session.activity}")
+    print(f"Minutes:   {session.duration_minutes:.2f}")
+    print(f"Comment:   {session.comment}")
+    print(f"State:     {'conflicted' if entry.conflicted else ('trashed' if entry.current.deleted else 'active')}")
+    print(f"Revisions: {len(entry.heads)} head(s), {len(entry.head_ids)} head id(s)")
+
+
+def cmd_trash(args):
+    store = _store(getattr(args, "db", None))
+    entry = next((e for e in store.entries() if e.session_id == args.session_id), None)
+    if entry is None:
+        raise SystemExit(f"Session not found: {args.session_id}")
+    if entry.conflicted:
+        raise SystemExit("Resolve competing versions before deleting")
+    store.change(entry.session_id, entry.head_ids, deleted=True)
+    print(f"Moved to trash: {entry.session_id}")
+
+
+def cmd_restore(args):
+    store = _store(getattr(args, "db", None))
+    entry = next((e for e in store.entries() if e.session_id == args.session_id), None)
+    if entry is None:
+        raise SystemExit(f"Session not found: {args.session_id}")
+    store.change(entry.session_id, entry.head_ids, deleted=False)
+    print(f"Restored: {entry.session_id}")
+
+
+def cmd_report(args):
+    store = _store(getattr(args, "db", None))
+    active = [e for e in store.entries() if not e.conflicted and not e.current.deleted]
+    daily, weekly = totals(active)
+    print("Totals per activity (active sessions only):")
+    by_activity = {}
+    for entry in active:
+        by_activity.setdefault(entry.current.session.activity, 0.0)
+        by_activity[entry.current.session.activity] += entry.current.session.duration_minutes
+    for activity, minutes in sorted(by_activity.items(), key=lambda kv: -kv[1]):
+        print(f"  {activity:<24} {minutes:>8.2f} min")
+    print(f"  {'TOTAL':<24} {sum(by_activity.values()):>8.2f} min")
+    print(f"\nDays with data: {len(daily)}  Weeks with data: {len(weekly)}")
+
+
+def cmd_export(args):
+    store = _store(getattr(args, "db", None))
+    entries = filtered(store.entries(), view=args.view or "history")
+    count = export_csv(entries, Path(args.path))
+    print(f"Exported {len(entries)} sessions to {args.path}")
+
+
+def cmd_sync(args):
+    status = sync_once()
+    print(f"Mode: {status.get('mode')}")
+    print(f"Pending operations: {status.get('pending_operations')}")
+    if status.get("last_success"):
+        print(f"Last success: {status.get('last_success')}")
+    if status.get("error"):
+        print(f"Error: {status.get('error')}")
+
+
+def cmd_status(args):
+    store = _store(getattr(args, "db", None))
+    status = store.status()
+    print(f"Mode: {status.get('mode')}")
+    print(f"Pending operations: {status.get('pending_operations')}")
+    print(f"Last success: {status.get('last_success') or 'never'}")
+    if status.get("error"):
+        print(f"Error: {status.get('error')}")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="prodz", description="Unified command line for prodz sessions.")
+    parser.add_argument("--db", type=Path, default=None, help="Use a different database file.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    timer = sub.add_parser("timer", help="Run the focus timer (delegates to prodz_cli.py).")
+    timer.set_defaults(func=cmd_timer)
+
+    history = sub.add_parser("history", help="List sessions.")
+    history.add_argument("--view", choices=["history", "trash", "conflicts"], default="history")
+    history.add_argument("--search", default="")
+    history.add_argument("--activity", default="")
+    history.add_argument("--since", default="")
+    history.add_argument("--until", default="")
+    history.set_defaults(func=cmd_history)
+
+    show = sub.add_parser("show", help="Show one session.")
+    show.add_argument("session_id")
+    show.set_defaults(func=cmd_show)
+
+    trash = sub.add_parser("trash", help="Move a session to the trash.")
+    trash.add_argument("session_id")
+    trash.set_defaults(func=cmd_trash)
+
+    restore = sub.add_parser("restore", help="Restore a trashed session.")
+    restore.add_argument("session_id")
+    restore.set_defaults(func=cmd_restore)
+
+    report = sub.add_parser("report", help="Print totals per activity.")
+    report.set_defaults(func=cmd_report)
+
+    export = sub.add_parser("export", help="Export sessions as CSV.")
+    export.add_argument("path")
+    export.add_argument("--view", choices=["history", "trash", "conflicts"], default="history")
+    export.set_defaults(func=cmd_export)
+
+    sync = sub.add_parser("sync", help="Sync with Turso now.")
+    sync.set_defaults(func=cmd_sync)
+
+    status = sub.add_parser("status", help="Show sync status.")
+    status.set_defaults(func=cmd_status)
+
+    return parser
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "timer":
+        script = Path(__file__).with_name("prodz_cli.py")
+        raise SystemExit(subprocess.call([sys.executable, str(script), *sys.argv[2:]]))
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        args.func(args)
+    except SystemExit:
+        raise
+    except Exception as error:
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

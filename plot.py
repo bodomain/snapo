@@ -1,5 +1,59 @@
 import shutil
 import database
+from rich.text import Text
+
+
+CHART_COLORS = ("red", "green", "yellow", "blue", "magenta", "cyan",
+                "bright_red", "bright_green", "bright_yellow", "bright_blue",
+                "bright_magenta", "bright_cyan")
+
+
+def activity_chart(data, width):
+    """Render session-level daily bars within the available terminal width."""
+    chart = Text("DAILY ACTIVITY · minutes\n\n", style="bold")
+    days = {}
+    for day, activity, duration in data:
+        if duration > 0:
+            days.setdefault(day, []).append((activity, duration))
+    if not days:
+        chart.append("No activity for these filters.\n", style="dim")
+        return chart
+    activities = sorted({activity for sessions in days.values() for activity, _ in sessions})
+    colors = {activity: CHART_COLORS[i % len(CHART_COLORS)]
+              for i, activity in enumerate(activities)}
+    chart.append("Legend: ", style="default")
+    for activity in activities:
+        chart.append("█ " + activity + "  ", style=colors[activity])
+    chart.append("\n\n", style="default")
+    maximum = max(sum(duration for _, duration in sessions) for sessions in days.values())
+    label_width = max(len(day) for day in days)
+    total_width = max(len(f"{sum(d for _, d in sessions):.2f}m") for sessions in days.values())
+    available = max(0, width - label_width - total_width - 4)
+    for day, sessions in sorted(days.items(), reverse=True):
+        sessions = sorted(sessions, key=lambda item: item[0])
+        total = sum(duration for _, duration in sessions)
+        target = min(available, max(1, round(total / maximum * available)))
+        separators = min(len(sessions) - 1, max(0, target - len(sessions)))
+        budget = target - separators
+        minimum = 1 if budget >= len(sessions) else 0
+        remaining = budget - minimum * len(sessions)
+        shares = [duration / total * remaining for _, duration in sessions]
+        lengths = [minimum + int(share) for share in shares]
+        for i in sorted(range(len(shares)), key=lambda i: shares[i] - int(shares[i]), reverse=True)[:budget - sum(lengths)]:
+            lengths[i] += 1
+        chart.append(f"{day:<{label_width}} | ", style="default")
+        drawn = False
+        for (activity, _), length in zip(sessions, lengths):
+            if not length:
+                continue
+            if drawn and separators:
+                chart.append("│", style="dim")
+                separators -= 1
+            chart.append("█" * length, style=colors[activity])
+            drawn = True
+        chart.append(f" {total:.2f}m\n", style="default")
+    chart.append("\n", style="default")
+    return chart
 
 # ANSI Colors for terminal output
 COLORS = [

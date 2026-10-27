@@ -1,4 +1,179 @@
-# Snapo
+# Aftermath
+
+Aftermath ist eine native Rust-Desktop-App für Linux. Fokus-Timer, bearbeitbarer
+Verlauf, Tages- und Wochenberichte, CSV-Export, Papierkorb und Konfliktauflösung
+übernehmen die Funktionen der bisherigen Python-Version.
+
+## Rust-App starten
+
+Rust 1.88 oder neuer, eine grafische Linux-Sitzung und die Entwicklungsbibliotheken
+für ALSA sind erforderlich. Unter Debian/Ubuntu: `sudo apt install build-essential
+pkg-config libasound2-dev`. Unter Arch Linux: `sudo pacman -S base-devel alsa-lib`.
+
+```bash
+cargo run --release --locked
+# Mit einer separaten Datenbank ausprobieren:
+cargo run --locked -- --local --db /tmp/aftermath-desktop-demo.db
+```
+
+Die App arbeitet standardmäßig lokal. Ihre Datenbank liegt unter
+`~/.local/share/snapo/snapo-desktop.db` (bzw. unter `$XDG_DATA_HOME`). Mit `--db`
+oder `AFTERMATH_DESKTOP_DB` lässt sich der Pfad ändern. `SNAPO_DB_PATH` gehört zum
+Python-Client und wird vom Desktop bewusst nicht als Datenbankpfad verwendet.
+Der bisherige Standardpfad und `SNAPO_DESKTOP_DB` bleiben für bestehende
+Installationen kompatibel. Auch Timer-Einstellungen bleiben beim Umbenennen erhalten.
+
+Die Oberfläche bietet:
+
+- **Fokus:** Aktivität und Notiz, Fokus- und Pausendauern, Zyklen, lange Pause
+  nach jedem vierten Zyklus, Zeitmessung ohne Limit, Pause/Fortsetzen und Ton.
+  Aktivität und Rhythmus lassen sich auch über eine Command-Line im Panel
+  definieren – wie in der Python-CLI, z. B. `Lernen -w 30 -c 2 -t "Vokabeln"`
+  (Optionen `-a`, `-t`, `-w`, `-b`, `-lb`, `-c`, `-e`).
+  Nur Fokuszeit wird gespeichert. Fehlgeschlagene Speicherversuche lassen sich
+  ohne doppelte Sitzungen wiederholen. Beim Schließen eines aktiven Timers
+  kannst du speichern, verwerfen oder abbrechen. Ein Prozessabbruch erhält den
+  aktiven Timer nicht.
+- **Verlauf:** Sitzungen ergänzen und bearbeiten, inklusive Datum und
+  Zeitstempel. Suche und inklusive Datums-/Aktivitätsfilter gelten auch für
+  Stats und CSV-Export. Doppelklick auf einen Zeitstempel öffnet den Editor.
+- **Stats:** Kennzahlen (Gesamtzeit, Sitzungen, Aktivitäten, Ø pro Tag, bester
+  Tag, Tage in Folge), ein Kalenderjahr-Chart nach Monaten oder ISO-Wochen,
+  gestapelte Tagesbalken mit einzelnen Sitzungssegmenten und Details beim
+  Überfahren, Wochentag- und Tageszeit-Verteilung, eine Aktivitäten-Rangliste
+  sowie Summen nach Tag oder ISO-Woche. Papierkorb und ungelöste Konflikte
+  werden ausgeschlossen.
+- **Papierkorb und Konflikte:** reversible Löschung/Wiederherstellung sowie
+  Vergleich und Zusammenführung paralleler Versionen. Zwischenzeitliche
+  Änderungen können einen geöffneten Editor nicht unbemerkt überschreiben.
+- **Einstellungen:** Datenbankprüfung, Import, Verbindungsstatus, Hell/Dunkel-
+  Darstellung und Tastenkürzel. Timer-Einstellungen bleiben zwischen Starts
+  erhalten.
+
+`F2`: Pause/Fortsetzen · `Strg+N`: ergänzen · `Strg+E`: bearbeiten · `Strg+D`:
+Papierkorb · `Strg+R`: wiederherstellen · `Strg+S`: synchronisieren · `F5`:
+neu laden · `Strg+Q`: beenden · `Escape`: Dialog abbrechen. Tab/Shift+Tab
+funktionieren in Formularen.
+
+## Rust-App mit Turso verbinden
+
+Setze `TURSO_DATABASE_URL` und `TURSO_AUTH_TOKEN` in `.env` im Projektordner
+oder als Umgebungsvariablen. Umgebungsvariablen haben Vorrang. Die alternative
+Option `--env-file /pfad/zu/.env` funktioniert auch für eine installierte App.
+Die Zugangsdaten werden nicht in den Oberflächeneinstellungen gespeichert.
+
+```bash
+cargo run --release --locked -- --sync
+# Expliziter Pfad pro Gerät:
+cargo run --release --locked -- --db /pfad/aftermath-desktop.db --sync
+```
+
+Alternativ lässt sich die konfigurierte Verbindung in den Einstellungen für die
+aktuelle Sitzung einschalten. Für automatischen Sync bei jedem Start verwende
+`--sync`. Synchronisiert wird nach Änderungen und alle 15 Sekunden im Hintergrund;
+Timer und Oberfläche bleiben bedienbar. Die Statusleiste zeigt ausstehende
+Revisionen, den letzten Erfolg und Fehler. Offline-Arbeit bleibt lokal gespeichert
+und wird beim nächsten erfolgreichen Abgleich hochgeladen.
+
+Die Rust-App verwendet eine eigene SQLite-Datei und überträgt unveränderliche
+Revisionen über [Tursos Hrana-HTTP-Protokoll](https://github.com/tursodatabase/libsql/blob/main/docs/HTTP_V2_SPEC.md).
+Sie benötigt eine vorhandene Cloud-Datenbank mit kompatiblem Schema **v2**. Zur
+Migration einer alten Cloud-Datenbank gilt weiterhin der unten beschriebene
+Python-Migrationsablauf. Die Rust-App migriert eine Cloud-Datenbank nicht beim
+Start. **Turso-Replikatdateien des Python-Clients werden niemals mit dem
+SQLite-Treiber geöffnet.** Noch nicht hochgeladene Änderungen solcher Replikate
+zuerst mit dem Python-Client synchronisieren. Danach lädt die Rust-App den
+Cloud-Verlauf einschließlich IDs, Papierkorb und Konflikten.
+
+Migrierte Alt-Datensätze werden wie im Python-Client unverändert übernommen,
+auch wenn alte Zeitstempel fehlerhaft sind. Der Verlauf markiert sie als
+„Altdaten prüfen“. Sie lassen sich löschen und wiederherstellen; beim Bearbeiten
+müssen die Eingaben den aktuellen Validierungsregeln entsprechen.
+
+Beim ersten expliziten Abgleich wird die Desktop-Datenbank an den Cloud-Datensatz
+gebunden; vorher erfasste lokale Sitzungen werden mit übertragen. Ein späterer
+Wechsel zu einem anderen Datensatz wird abgelehnt. Dafür eine neue Desktop-Datei
+wählen. Jeder Rechner benötigt seine eigene Datei und Geräteidentität.
+
+## Bestehende lokale Python-Daten übernehmen
+
+Unter Einstellungen → „Python-Datenbank importieren“ kann eine **normale
+SQLite-Datei** ausgewählt werden. Alternativ:
+
+```bash
+cargo run --locked -- --db /pfad/neue-desktop.db import /pfad/python-local.db
+```
+
+Der Import liest die Quelle in einer Transaktion und verändert sie nicht.
+V2-Dateien behalten ihre Datensatz-, Sitzungs- und Revisions-IDs, einschließlich
+aller Konfliktversionen. Sie dürfen nur in eine neue Desktop-Datenbank oder
+denselben Datensatz importiert werden. Alte `sessions`-Tabellen werden ebenfalls
+übernommen; deren IDs hängen vom absoluten Quellpfad und der ursprünglichen
+Zeilen-ID ab. Wiederholte Importe derselben unveränderten Quelle sind idempotent.
+Wurde eine bereits importierte alte Zeile anschließend in Python geändert, bricht
+der Import ab, statt die Änderung unbemerkt zu überschreiben. Zum gemeinsamen
+Cloud-Betrieb zuerst die Python-v2-Migration verwenden, damit beide Clients
+dieselben IDs erhalten.
+
+## Installation und Befehle
+
+```bash
+# Baut die Release-App und legt einen Eintrag im Linux-App-Menü an:
+./scripts/install-desktop.sh
+# Danach:
+~/.local/bin/aftermath
+~/.local/bin/aftermath --sync --env-file /pfad/zu/.env
+
+# Weitere Befehle ohne Fenster:
+cargo run --locked -- --db /tmp/aftermath-desktop-demo.db check
+cargo run --locked -- --db /tmp/aftermath-desktop-demo.db history
+cargo run --locked -- --db /tmp/aftermath-desktop-demo.db export /tmp/aftermath-export.csv
+cargo run --locked -- --db /pfad/aftermath-desktop.db sync
+cargo run --locked -- --db /pfad/aftermath-desktop.db sync --interval 15
+# Cloud-Verbindung/Schema prüfen, ohne die Cloud zu verändern:
+cargo run --locked -- remote-check
+```
+
+Ein CSV-Export überschreibt keine vorhandene Datei und schützt Freitext vor
+Tabellenkalkulationsformeln. Er enthält aktive, konfliktfreie Sitzungen und ist
+keine vollständige Datensicherung.
+
+Für Synchronisierung bei geschlossenem Fenster kann der Rust-Prozess als eigener
+Benutzerdienst installiert werden. Das Skript zeigt standardmäßig nur die Unit:
+
+```bash
+./scripts/install-sync-service.sh /pfad/aftermath-desktop.db /pfad/zu/.env
+./scripts/install-sync-service.sh /pfad/aftermath-desktop.db /pfad/zu/.env --install
+systemctl --user status aftermath-desktop-sync.service
+```
+
+## Rust-Entwicklung und Prüfung
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo build --release --locked
+# Das echte Desktop-Fenster aufnehmen und anschließend schließen:
+cargo run --locked -- --local --db /tmp/aftermath-screen.db --screenshot /tmp/aftermath.png
+# Bestimmte Ansicht öffnen oder aufnehmen:
+cargo run --locked -- --view stats --screenshot /tmp/aftermath-stats.png
+```
+
+Rust-Tests verwenden ausschließlich temporäre lokale Daten und einen lokalen
+HTTP-Testserver mit SQLite. Sie prüfen Timer und Pausen, Speicherversuche,
+Zyklen, Revisionskonvergenz, Konflikte, veraltete Formulare, Papierkorb,
+Wiederherstellung, Filter, Stats, CSV, Import sowie den HTTP-Abgleich zweier
+unabhängiger Desktop-Dateien. Oberflächentests bedienen echte egui-Schaltflächen
+und Tastenkürzel und prüfen kleine sowie große Fenster. Diese Tests verwenden
+keine Projekt-Zugangsdaten; ein erfolgreicher lokaler Test ist kein Nachweis
+eines Abgleichs mit einem echten Turso-Konto.
+
+Die Desktop-Implementierung liegt in `src/`: `timer.rs`, `history.rs`, `store.rs`,
+`sync.rs`, `config.rs`, `ui.rs` und `main.rs`. Schriften sind eingebettet; ihre
+Lizenz steht in `assets/FONT-LICENSE`.
+
+## Bisherige Python-Version
 
 A personal Linux productivity timer and session workspace. The Textual TUI
 combines a timer, editable history, daily/weekly reports, CSV export, Trash, and
@@ -45,9 +220,13 @@ SQLite. `--local` requires an explicit database path and refuses replica files.
 - **History:** browse timestamps through the editor, search activity/comments/
   timestamps, filter activity and an inclusive date range, add/edit sessions,
   or move them to Trash. History and report exports use the History filters.
-- **Reports:** daily and ISO-week totals by activity. Days follow each session's
-  recorded date, including when viewed from another timezone. Deleted sessions
-  and unresolved conflicts do not contribute to totals.
+- **Stats:** key figures (total, sessions, activities, daily average, best day,
+  streak), a calendar-year chart by month or ISO week, daily stacked activity
+  charts with colored session segments and a legend, weekday and time-of-day
+  distribution, an activity ranking, plus daily and ISO-week totals by
+  activity. Charts use the History filters. Days follow each session's recorded
+  date, including when viewed from another timezone. Deleted sessions and
+  unresolved conflicts do not contribute to totals.
 - **Trash:** deletion syncs as a reversible revision. Restore a selected session
   to return it to history on all computers. There is no permanent-delete action.
 - **Conflicts:** concurrent offline edits, including delete-versus-edit, retain
@@ -195,5 +374,5 @@ passes alone do not certify the cloud transport.
 
 The shared modules are `timer.py` (timekeeping), `sessions.py` (revision history,
 conflicts, reports, exports), and `database.py` (local operations and transport).
-A future desktop app can use the same operations. Desktop/tray integration,
-active-timer handoff, mobile access, and multi-user sharing are deferred.
+The native Rust desktop app described above uses compatible revision history.
+Tray integration, active-timer handoff, mobile access, and multi-user sharing are deferred.

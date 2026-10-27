@@ -5,7 +5,7 @@ import time
 import pytest
 from textual.widgets import Button, Checkbox, DataTable, Input, Static, TabbedContent
 
-from app import Editor, Question, Snapo
+from app import DailyChart, Editor, Question, Snapo
 from database import Config, Store
 from sessions import Session, SessionHistory
 
@@ -20,6 +20,28 @@ def store(tmp_path):
 async def settle(app, pilot):
     await app.workers.wait_for_complete()
     await pilot.pause()
+
+
+async def test_reports_chart_tracks_filters_deletion_and_resize(store):
+    store.create(Session('2026-10-15', '2026-10-15T10:00:00', 'Study', 25))
+    removed = store.create(Session('2026-10-15', '2026-10-15T11:00:00', 'Hidden', 90))
+    store.change(removed.session_id, (removed.revision_id,), deleted=True)
+    app = Snapo(store, auto_sync=False)
+    async with app.run_test(size=(120, 45)) as pilot:
+        await settle(app, pilot)
+        app.query_one('#tabs', TabbedContent).active = 'reports-tab'
+        await pilot.pause()
+        chart = app.query_one('#daily-chart', DailyChart)
+        assert '25.00m' in chart.content.plain
+        assert 'Hidden' not in chart.content.plain
+        assert chart.region.height > 0
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        bars = [line for line in chart.content.plain.splitlines() if line.startswith('2026-')]
+        assert all(len(line) <= chart.size.width for line in bars)
+        app.query_one('#filter-activity', Input).value = 'absent'
+        await pilot.pause()
+        assert 'No activity' in chart.content.plain
 
 
 async def test_create_edit_filter_trash_restore_and_export(store, tmp_path):

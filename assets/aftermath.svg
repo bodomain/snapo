@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Aftermath">
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#4058cc"/>
+  <circle cx="64" cy="64" r="38" fill="none" stroke="#fff" stroke-width="6"/>
+  <path d="M64 36v28l18 12" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="64" cy="64" r="6" fill="#fff"/>
+</svg>

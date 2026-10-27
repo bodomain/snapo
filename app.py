@@ -1,4 +1,4 @@
-"""Snapo's Linux terminal workspace. Run: python app.py --help."""
+"""Aftermath's Linux terminal workspace. Run: python app.py --help."""
 import argparse
 import asyncio
 from datetime import datetime
@@ -17,6 +17,29 @@ from database import Config, Store
 from sessions import Session, export_csv, filtered, totals
 from timer import Timer
 from notifications import play_sound
+from plot import activity_chart
+
+
+class DailyChart(Static):
+    """Responsive chart using the same filtered history as the report totals."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.data = []
+        self.chart_width = None
+
+    def set_entries(self, entries):
+        self.data = [(entry.current.session.date, entry.current.session.activity,
+                      entry.current.session.duration_minutes) for entry in entries]
+        self.update_chart()
+
+    def on_resize(self):
+        if self.content_size.width != self.chart_width:
+            self.update_chart()
+
+    def update_chart(self):
+        self.chart_width = self.content_size.width
+        self.update(activity_chart(self.data, self.chart_width))
 
 
 class Question(ModalScreen[str]):
@@ -146,7 +169,7 @@ class ExportDialog(ModalScreen[bool]):
     def compose(self):
         with Vertical(id="dialog"):
             yield Label("Export filtered active sessions (conflicts excluded)")
-            yield Input(str(Path.home() / f"snapo-{datetime.now():%Y%m%d-%H%M%S}.csv"), id="export-path")
+            yield Input(str(Path.home() / f"aftermath-{datetime.now():%Y%m%d-%H%M%S}.csv"), id="export-path")
             yield Static("Existing files will not be overwritten.")
             yield Static("", id="export-error", markup=False)
             with Horizontal(classes="buttons"):
@@ -173,7 +196,7 @@ class ExportDialog(ModalScreen[bool]):
 
 
 class Snapo(App):
-    TITLE = "Snapo"
+    TITLE = "Aftermath"
     SUB_TITLE = "Focus · history · sync"
     CSS = """
     Screen { background: $surface; }
@@ -262,6 +285,7 @@ class Snapo(App):
             with TabPane("Reports", id="reports-tab"):
                 yield Static("Uses the History filters. Deleted and conflicted sessions are excluded.")
                 with VerticalScroll(id="reports-body"):
+                    yield DailyChart(id="daily-chart")
                     yield Static("", id="reports", markup=False)
                 with Horizontal(classes="buttons"):
                     yield Button("Export CSV", id="report-export")
@@ -360,6 +384,7 @@ class Snapo(App):
             if selected and selected in table.rows:
                 table.move_cursor(row=table.get_row_index(selected))
         daily, weekly = totals(active)
+        self.query_one("#daily-chart", DailyChart).set_entries(active)
         lines = ["DAILY TOTALS", *[f"{day}  {activity}: {minutes:.2f} min" for (day, activity), minutes in sorted(daily.items(), reverse=True)],
                  "", "WEEKLY TOTALS", *[f"{week}  {activity}: {minutes:.2f} min" for (week, activity), minutes in sorted(weekly.items(), reverse=True)]]
         self.query_one("#reports", Static).update("\n".join(lines))
