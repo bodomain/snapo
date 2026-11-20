@@ -89,6 +89,16 @@ impl Clock {
     pub fn complete(&self, now: Instant) -> bool {
         self.target.is_some_and(|t| self.elapsed(now) >= t)
     }
+    /// Exact instant the clock reaches its target, or `None` while paused or
+    /// endless. Used to catch up stalled phases at their real deadline.
+    pub fn completes_at(&self) -> Option<Instant> {
+        let target = self.target?;
+        if self.paused {
+            return None;
+        }
+        let remaining = target.checked_sub(self.accumulated)?;
+        self.since.checked_add(remaining)
+    }
     pub fn remaining(&self, now: Instant) -> Option<Duration> {
         self.target.map(|t| t.saturating_sub(self.elapsed(now)))
     }
@@ -210,6 +220,13 @@ pub fn bell() {
 /// owns no timer state: the UI publishes the current deadline once per frame,
 /// and while the loop is stalled nothing can change the run, so the last
 /// published deadline stays valid.
+///
+/// While the loop is stalled, the watcher also keeps walking the Pomodoro
+/// sequence on its own (see [`DeadlineWatcher::schedule_run`]): after a
+/// deadline it rings and computes the next phase from the published plan, so
+/// the break bell and later bells still ring while no frame arrives. When the
+/// UI resumes, its tick loop catches up at the exact deadlines and replaces
+/// the chain with a fresh single deadline.
 pub struct DeadlineWatcher {
     shared: Arc<(Mutex<Deadline>, Condvar)>,
 }
@@ -222,6 +239,17 @@ struct Deadline {
     /// Generation the watcher already rang for, so the tick loop can skip
     /// its own bell when it catches up after a stalled loop.
     rung: Option<u64>,
+    /// Remaining sequence the watcher rings through while the UI is stalled.
+    chain: Option<Chain>,
+}
+
+/// Where the published deadline sits in the Pomodoro sequence, so the
+/// watcher can derive the following phases without the UI loop.
+#[derive(Clone)]
+struct Chain {
+    plan: Plan,
+    phase: Phase,
+    cycle: u32,
 }
 
 impl DeadlineWatcher {
@@ -232,20 +260,31 @@ impl DeadlineWatcher {
     /// Uses `ring` instead of [`bell`], which keeps the watcher testable
     /// without an audio device.
     pub fn with_bell(ring: impl Fn() + Send + 'static) -> Self {
+        Self::with_bell_and_scale(ring, 60.0)
+    }
+    /// Test hook: `scale` seconds stand for one plan minute, so chained
+    /// phase sequences can be observed without waiting real minutes.
+    fn with_bell_and_scale(ring: impl Fn() + Send + 'static, scale: f64) -> Self {
         let shared = Arc::new((Mutex::new(Deadline::default()), Condvar::new()));
         let state = Arc::clone(&shared);
-        std::thread::spawn(move || watch(state, ring));
+        std::thread::spawn(move || watch(state, ring, scale));
         Self { shared }
     }
     /// Publishes when the current phase should ring; a deadline already in
     /// the past rings immediately, because the phase ended while the loop
     /// was stalled.
     pub fn schedule(&self, at: Instant) {
-        publish(&self.shared, Some(at));
+        publish(&self.shared, Some(at), None);
+    }
+    /// Like [`Self::schedule`], but also hands the watcher the position in
+    /// the Pomodoro sequence so it can keep ringing through the following
+    /// phases while the UI loop is stalled.
+    pub fn schedule_run(&self, plan: Plan, phase: Phase, cycle: u32, at: Instant) {
+        publish(&self.shared, Some(at), Some(Chain { plan, phase, cycle }));
     }
     /// Removes the deadline, e.g. after a pause, discard or finished run.
     pub fn cancel(&self) {
-        publish(&self.shared, None);
+        publish(&self.shared, None, None);
     }
     /// Takes whether the watcher already rang for the current phase, so the
     /// tick loop does not ring a second time when it catches up.
@@ -258,57 +297,111 @@ impl DeadlineWatcher {
     }
 }
 
-fn publish(shared: &(Mutex<Deadline>, Condvar), at: Option<Instant>) {
+fn publish(shared: &(Mutex<Deadline>, Condvar), at: Option<Instant>, chain: Option<Chain>) {
     let (mutex, wake) = shared;
     let mut deadline = mutex.lock().unwrap();
     deadline.generation += 1;
     deadline.at = at;
     deadline.rung = None;
+    deadline.chain = chain;
     wake.notify_all();
 }
 
-fn watch(shared: Arc<(Mutex<Deadline>, Condvar)>, ring: impl Fn()) {
+fn watch(shared: Arc<(Mutex<Deadline>, Condvar)>, ring: impl Fn(), scale: f64) {
     let (mutex, wake) = &*shared;
     let mut deadline = mutex.lock().unwrap();
     loop {
-        let Some(at) = deadline.at else {
+        let Some(mut at) = deadline.at else {
             deadline = wake.wait(deadline).unwrap();
             continue;
         };
         let generation = deadline.generation;
-        // Wait until the deadline or a reschedule/cancel (generation change).
-        // `wait_timeout` also returns on spurious wakeups, so re-check and
-        // keep waiting with the remaining time.
-        let mut remaining = at.saturating_duration_since(Instant::now());
-        let reached = if remaining > Duration::ZERO {
-            loop {
-                let (guard, result) = wake.wait_timeout(deadline, remaining).unwrap();
-                deadline = guard;
-                if deadline.generation != generation {
-                    break false;
+        let mut chain = deadline.chain.clone();
+        // Ring at this deadline, then continue with the next chained phase.
+        loop {
+            // Wait until the deadline or a reschedule/cancel (generation
+            // change). `wait_timeout` also returns on spurious wakeups, so
+            // re-check and keep waiting with the remaining time.
+            let mut remaining = at.saturating_duration_since(Instant::now());
+            let reached = if remaining > Duration::ZERO {
+                loop {
+                    let (guard, result) = wake.wait_timeout(deadline, remaining).unwrap();
+                    deadline = guard;
+                    if deadline.generation != generation {
+                        break false;
+                    }
+                    if result.timed_out() {
+                        break true;
+                    }
+                    remaining = at.saturating_duration_since(Instant::now());
+                    if remaining == Duration::ZERO {
+                        break true;
+                    }
                 }
-                if result.timed_out() {
-                    break true;
-                }
-                remaining = at.saturating_duration_since(Instant::now());
-                if remaining == Duration::ZERO {
-                    break true;
-                }
+            } else {
+                true
+            };
+            if !reached {
+                break; // Outer loop picks up the newly published deadline.
             }
-        } else {
-            true
-        };
-        if reached && deadline.rung != Some(generation) {
             deadline.rung = Some(generation);
             drop(deadline);
             ring();
-            // Park until the UI publishes the next deadline, so an already
-            // reached deadline never rings twice.
             deadline = mutex.lock().unwrap();
-            while deadline.generation == generation && deadline.at == Some(at) {
-                deadline = wake.wait(deadline).unwrap();
+            if deadline.generation != generation {
+                break; // The UI resumed with a fresh deadline.
+            }
+            let next = chain.take().and_then(|chain| {
+                next_phase(&chain.plan, chain.phase, chain.cycle)
+                    .map(|(phase, cycle, duration)| (chain.plan, phase, cycle, duration))
+            });
+            match next {
+                Some((plan, phase, cycle, duration)) => {
+                    // Chained phases are scheduled relative to the deadline
+                    // that just rang, so a late wake-up never shifts them.
+                    let seconds = duration.as_secs_f64() / 60.0 * scale;
+                    at += Duration::from_secs_f64(seconds.max(0.0));
+                    chain = Some(Chain { plan, phase, cycle });
+                }
+                None => {
+                    // Park until the UI publishes the next deadline, so an
+                    // already reached deadline never rings twice.
+                    while deadline.generation == generation {
+                        deadline = wake.wait(deadline).unwrap();
+                    }
+                    break;
+                }
             }
         }
+    }
+}
+
+/// The next phase and its duration, mirroring [`Run::advance`] so the
+/// watcher can run the sequence on its own while the UI loop is stalled.
+/// `None` means the run ends with the current phase.
+fn next_phase(plan: &Plan, phase: Phase, cycle: u32) -> Option<(Phase, u32, Duration)> {
+    match phase {
+        Phase::Work => {
+            if plan.endless || cycle >= plan.cycles {
+                return None;
+            }
+            let next = if cycle.is_multiple_of(4) {
+                Phase::LongBreak
+            } else {
+                Phase::ShortBreak
+            };
+            let minutes = if next == Phase::LongBreak {
+                plan.long_break
+            } else {
+                plan.short_break
+            };
+            Some((next, cycle, Duration::from_secs(u64::from(minutes) * 60)))
+        }
+        Phase::ShortBreak | Phase::LongBreak => Some((
+            Phase::Work,
+            cycle + 1,
+            Duration::from_secs(u64::from(plan.work) * 60),
+        )),
     }
 }
 
@@ -385,6 +478,102 @@ mod tests {
             rings.load(Ordering::Relaxed),
             0,
             "Nur der letzte Termin zählt"
+        );
+    }
+
+    #[test]
+    fn chained_phases_keep_ringing_while_the_ui_is_stalled() {
+        // 0.1 seconds stand for one plan minute: work → break → work → end.
+        let rings = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&rings);
+        let watcher = DeadlineWatcher::with_bell_and_scale(
+            move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+            },
+            0.1,
+        );
+        let plan = Plan {
+            work: 1,
+            short_break: 1,
+            cycles: 2,
+            ..Default::default()
+        };
+        watcher.schedule_run(plan, Phase::Work, 1, Instant::now());
+        await_rings(&rings, 3);
+        thread::sleep(Duration::from_millis(150));
+        assert_eq!(
+            rings.load(Ordering::Relaxed),
+            3,
+            "Fokus, Pause und zweiter Fokus klingeln durch; danach endet die Kette"
+        );
+        assert!(watcher.take_rung());
+    }
+
+    #[test]
+    fn cancelling_stops_a_running_chain() {
+        let rings = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&rings);
+        let watcher = DeadlineWatcher::with_bell_and_scale(
+            move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+            },
+            0.5,
+        );
+        watcher.schedule_run(
+            Plan {
+                work: 1,
+                short_break: 1,
+                cycles: 4,
+                ..Default::default()
+            },
+            Phase::Work,
+            1,
+            Instant::now(),
+        );
+        await_rings(&rings, 1);
+        watcher.cancel();
+        thread::sleep(Duration::from_millis(800));
+        assert_eq!(rings.load(Ordering::Relaxed), 1, "Pause stoppt die Kette");
+    }
+
+    #[test]
+    fn chain_sequence_matches_run_advance() {
+        let plan = Plan {
+            work: 3,
+            short_break: 2,
+            long_break: 4,
+            cycles: 5,
+            ..Default::default()
+        };
+        // Walk the sequence once via next_phase …
+        let mut chained = vec![(Phase::Work, 1u32, Duration::from_secs(3 * 60))];
+        let mut cur = (Phase::Work, 1u32);
+        while let Some((phase, cycle, duration)) = next_phase(&plan, cur.0, cur.1) {
+            chained.push((phase, cycle, duration));
+            cur = (phase, cycle);
+        }
+        // … and once through the real Run, then compare.
+        let mut run = Run::new(plan, "Kette".into(), "".into(), Instant::now()).unwrap();
+        let mut advanced = vec![(run.phase, run.cycle, run.clock.target.unwrap())];
+        let mut at = Instant::now();
+        loop {
+            at += run.clock.target.unwrap();
+            if !run.advance(at).unwrap() {
+                break;
+            }
+            advanced.push((run.phase, run.cycle, run.clock.target.unwrap()));
+        }
+        assert_eq!(advanced, chained);
+        assert!(
+            next_phase(
+                &Plan {
+                    endless: true,
+                    ..Default::default()
+                },
+                Phase::Work,
+                1
+            )
+            .is_none()
         );
     }
 }

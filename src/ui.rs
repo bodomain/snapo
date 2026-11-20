@@ -494,33 +494,41 @@ impl Aftermath {
             Err(e) => self.notify(e.to_string(), true),
         }
     }
-    fn finish_timer(&mut self, advance: bool, now: Instant) -> Result<()> {
+    fn finish_timer(&mut self, advance: bool, completion: Instant, live: bool) -> Result<()> {
         let Some(run) = self.run.as_mut() else {
             return Ok(());
         };
         if run.phase == Phase::Work {
-            let session = run.clock.snapshot(now)?;
+            let session = run.clock.snapshot(completion)?;
             self.store.create(session, Some(&run.clock.id))?;
         }
         let sound = advance && run.plan.sound;
-        let continued = advance && run.advance(now)?;
+        let continued = advance && run.advance(completion)?;
         if !continued {
             self.run = None;
         }
         self.save_failed = false;
-        // The watcher may have rung already while the tick loop was stalled
-        // on a hidden workspace; never ring twice for the same phase.
-        if sound && !self.watcher.take_rung() {
+        // While the tick loop was stalled on a hidden workspace, the watcher
+        // already rang the bell (or several) on time; never ring twice for
+        // the same phase, and never ring belatedly for catch-up phases.
+        let rung = self.watcher.take_rung();
+        if sound && live && !rung {
             timer::bell();
         }
         Ok(())
     }
-    fn finish_action(&mut self, advance: bool, ctx: &egui::Context) -> bool {
+    fn finish_action(
+        &mut self,
+        advance: bool,
+        ctx: &egui::Context,
+        completion: Instant,
+        live: bool,
+    ) -> bool {
         let was_work = self
             .run
             .as_ref()
             .is_some_and(|run| run.phase == Phase::Work);
-        match self.finish_timer(advance, Instant::now()) {
+        match self.finish_timer(advance, completion, live) {
             Ok(()) => {
                 self.saved(
                     if was_work {
@@ -540,34 +548,54 @@ impl Aftermath {
         }
     }
     fn tick(&mut self, ctx: &egui::Context) {
-        if !self.save_failed
-            && self
+        // Catch up on phases that ended while the render loop was stalled on
+        // a hidden workspace: advance at the exact completion instants, so
+        // the next phase shows the time that has really passed instead of
+        // starting fresh when the window regains focus.
+        let now = Instant::now();
+        while !self.save_failed {
+            let completed = self
                 .run
                 .as_ref()
-                .is_some_and(|r| r.clock.complete(Instant::now()))
-        {
-            self.finish_action(true, ctx);
+                .and_then(|run| run.clock.completes_at())
+                .filter(|completion| *completion <= now);
+            let Some(completion) = completed else {
+                break;
+            };
+            // A completion the user is still seeing: ring the normal bell
+            // unless the watcher already did. A stale one from a stalled
+            // loop is silent – the watcher rang it on time.
+            let live = now.saturating_duration_since(completion) < Duration::from_secs(2);
+            self.finish_action(true, ctx, completion, live);
         }
         if self.last_reload.elapsed() > Duration::from_secs(2) {
             self.reload();
         }
         self.poll_sync(ctx);
     }
-    /// Publishes the current completion deadline to the background bell
-    /// watcher (see `DeadlineWatcher`). One call per frame is enough: while
-    /// the loop is stalled on a hidden workspace nothing can change the run,
-    /// so the last published deadline stays valid.
+    /// Publishes the current completion deadline and the remaining phase
+    /// sequence to the background bell watcher (see `DeadlineWatcher`). One
+    /// call per frame is enough: while the loop is stalled on a hidden
+    /// workspace nothing can change the run, so the last published chain
+    /// stays valid.
     fn resync_deadline(&mut self) {
         let now = Instant::now();
-        let deadline = self.run.as_ref().and_then(|run| {
-            if run.plan.sound && !run.clock.paused {
-                run.clock.remaining(now).map(|remaining| now + remaining)
-            } else {
-                None
-            }
-        });
-        match deadline {
-            Some(at) => self.watcher.schedule(at),
+        let scheduled = if self.save_failed {
+            // The phase is stuck on a failed save; an overdue deadline
+            // would ring on every frame until the retry succeeds.
+            None
+        } else {
+            self.run.as_ref().and_then(|run| {
+                if run.plan.sound && !run.clock.paused {
+                    let remaining = run.clock.remaining(now)?;
+                    Some((run.plan.clone(), run.phase, run.cycle, now + remaining))
+                } else {
+                    None
+                }
+            })
+        };
+        match scheduled {
+            Some((plan, phase, cycle, at)) => self.watcher.schedule_run(plan, phase, cycle, at),
             None => self.watcher.cancel(),
         }
     }
@@ -962,7 +990,7 @@ impl Aftermath {
                     if self.save_failed {
                         if primary(ui, "Speichern wiederholen", 180.0).clicked() {
                             let complete = self.run.as_ref().is_some_and(|r| r.clock.complete(now));
-                            self.finish_action(complete, ctx);
+                            self.finish_action(complete, ctx, now, true);
                         }
                     } else if primary(ui, if paused { "Fortsetzen" } else { "Pausieren" }, 130.0)
                         .clicked()
@@ -971,7 +999,7 @@ impl Aftermath {
                         run.clock.toggle_pause(now);
                     }
                     if ui.button("Speichern & beenden").clicked() {
-                        self.finish_action(false, ctx);
+                        self.finish_action(false, ctx, now, true);
                     }
                     if ui.button("Verwerfen").clicked() {
                         self.dialog = Some(Dialog::Discard);
@@ -1540,7 +1568,7 @@ impl Aftermath {
                         ui.heading("Dein Timer ist noch aktiv"); ui.add_space(12.0);
                         muted(ui, "Was soll mit der aktuellen Fokuszeit geschehen? Pausenzeiten werden nicht gespeichert.");
                         ui.add_space(16.0); ui.horizontal_wrapped(|ui| {
-                            if primary(ui, "Speichern & schließen", 185.0).clicked() && self.finish_action(false, ctx) {
+                            if primary(ui, "Speichern & schließen", 185.0).clicked() && self.finish_action(false, ctx, Instant::now(), true) {
                                 self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); close = true;
                             }
                             if ui.button("Verwerfen & schließen").clicked() {
@@ -2568,6 +2596,45 @@ mod tests {
         app.tick(&ctx);
         assert_eq!(app.store.revisions().unwrap().len(), 2);
         assert!(app.run.is_none());
+    }
+
+    #[test]
+    fn stalled_phases_catch_up_at_their_exact_deadlines() {
+        // The reported bug: while the window hid on another workspace the
+        // work phase ended, but the break only started counting when the
+        // GUI regained focus. Tick must advance by the real completion
+        // instants, so the break already shows its elapsed background time.
+        let (_dir, mut app, ctx) = app();
+        let past = Instant::now() - Duration::from_secs(150);
+        let plan = Plan {
+            work: 1,
+            short_break: 1,
+            cycles: 4,
+            sound: false,
+            ..Default::default()
+        };
+        app.run = Some(Run::new(plan, "Versteckt".into(), "".into(), past).unwrap());
+        app.tick(&ctx);
+        let run = app.run.as_ref().unwrap();
+        assert_eq!(app.store.revisions().unwrap().len(), 1);
+        assert_eq!(
+            run.phase,
+            Phase::Work,
+            "Fokus und Pause liefen im Hintergrund durch"
+        );
+        assert_eq!(run.cycle, 2);
+        let remaining = run.clock.remaining(Instant::now()).unwrap();
+        assert!(
+            remaining > Duration::from_secs(25) && remaining < Duration::from_secs(35),
+            "Das neue Fokusintervall zählt ab seinem echten Start, nicht ab Fokus"
+        );
+        // The break that ended while hidden saved no session, and the clock
+        // of the live phase was started at its real deadline.
+        assert_eq!(
+            run.clock.completes_at(),
+            Some(past + Duration::from_secs(180)),
+            "Die Pause wurde mitgezählt statt neu gestartet"
+        );
     }
 
     #[test]
