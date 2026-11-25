@@ -25,18 +25,20 @@ Installationen kompatibel. Auch Timer-Einstellungen bleiben beim Umbenennen erha
 
 Die Oberfläche bietet:
 
-- **Fokus:** Aktivität und Notiz, Fokus- und Pausendauern, Zyklen, lange Pause
-  nach jedem vierten Zyklus, Zeitmessung ohne Limit, Pause/Fortsetzen und Ton.
-  Aktivität und Rhythmus lassen sich auch über eine Command-Line im Panel
+- **Fokus & Verlauf:** Starte den Timer – die laufende Zeit steht groß auf
+  einer Uhr mit Fortschrittsring – und sieh deine Sitzungen direkt darunter.
+  Unter „Timer-Plan“ stellst du Fokus- und Pausendauern, Zyklen, Zeitmessung ohne
+  Limit und Ton ein. Nach jedem vierten Zyklus folgt bei Bedarf eine lange Pause.
+  Aktivität und Rhythmus lassen sich auch über „Command-Line“
   definieren – wie in der Python-CLI, z. B. `Lernen -w 30 -c 2 -t "Vokabeln"`
   (Optionen `-a`, `-t`, `-w`, `-b`, `-lb`, `-c`, `-e`).
   Nur Fokuszeit wird gespeichert. Fehlgeschlagene Speicherversuche lassen sich
   ohne doppelte Sitzungen wiederholen. Beim Schließen eines aktiven Timers
   kannst du speichern, verwerfen oder abbrechen. Ein Prozessabbruch erhält den
   aktiven Timer nicht.
-- **Verlauf:** Sitzungen ergänzen und bearbeiten, inklusive Datum und
-  Zeitstempel. Suche und inklusive Datums-/Aktivitätsfilter gelten auch für
-  Stats und CSV-Export. Doppelklick auf einen Zeitstempel öffnet den Editor.
+  Im Verlauf kannst du Sitzungen ergänzen und per Doppelklick auf eine Zeile
+  bearbeiten. Suche sowie Aktivitäts- und Datumsfilter gelten auch für Stats
+  und CSV-Export.
 - **Stats:** Kennzahlen (Gesamtzeit, Sitzungen, Aktivitäten, Ø pro Tag, bester
   Tag, Tage in Folge), ein Kalenderjahr-Chart nach Monaten oder ISO-Wochen,
   gestapelte Tagesbalken mit einzelnen Sitzungssegmenten und Details beim

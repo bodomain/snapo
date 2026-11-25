@@ -127,8 +127,8 @@ fn main() -> Result<()> {
                 viewport: eframe::egui::ViewportBuilder::default()
                     .with_app_id("aftermath")
                     .with_title("Aftermath – Zeit für Fokus")
-                    .with_inner_size([1180.0, 820.0])
-                    .with_min_inner_size([720.0, 560.0]),
+                    .with_inner_size([1000.0, 680.0])
+                    .with_min_inner_size([626.0, 520.0]),
                 renderer: eframe::Renderer::Glow,
                 // Keep the existing timer preferences through the rename.
                 persistence_path: eframe::storage_dir("snapo").map(|dir| dir.join("app.ron")),

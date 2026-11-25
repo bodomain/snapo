@@ -138,12 +138,19 @@ fn surface() -> Color32 {
 fn notice_error_bg() -> Color32 {
     palette().notice_error_bg
 }
+/// Ring and heading color of the running phase: focus in accent, breaks in teal.
+fn phase_color(phase: Phase) -> Color32 {
+    match phase {
+        Phase::Work => accent(),
+        Phase::ShortBreak | Phase::LongBreak => teal(),
+    }
+}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Page {
     #[default]
+    #[value(alias = "history")]
     Focus,
-    History,
     Stats,
     Trash,
     Conflicts,
@@ -152,8 +159,7 @@ pub enum Page {
 impl Page {
     fn title(self) -> &'static str {
         match self {
-            Self::Focus => "Deine Fokuszeit",
-            Self::History => "Verlauf",
+            Self::Focus => "Fokus & Verlauf",
             Self::Stats => "Stats",
             Self::Trash => "Papierkorb",
             Self::Conflicts => "Konflikte",
@@ -162,14 +168,12 @@ impl Page {
     }
     fn subtitle(self) -> &'static str {
         match self {
-            Self::Focus => "Eine Sache nach der anderen.",
-            Self::History => "Sitzungen ansehen, ergänzen und bearbeiten.",
-            Self::Stats => "So verteilt sich deine Zeit. Die Verlaufsfilter gelten auch hier.",
+            Self::Focus | Self::Settings => "",
+            Self::Stats => "Die Verlaufsfilter gelten auch hier.",
             Self::Trash => "Gelöschte Sitzungen bleiben erhalten und lassen sich wiederherstellen.",
             Self::Conflicts => {
                 "Vergleiche parallele Änderungen und entscheide, welche Version gilt."
             }
-            Self::Settings => "Dein Timer, deine Daten und die Verbindung zwischen deinen Geräten.",
         }
     }
     fn view(self) -> View {
@@ -179,6 +183,12 @@ impl Page {
             _ => View::History,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimerDetails {
+    Plan,
+    Command,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -259,7 +269,10 @@ pub struct Aftermath {
     entries: Vec<Entry>,
     page: Page,
     filter: Filter,
+    show_filters: bool,
     selected: Option<String>,
+    last_row_click: Option<egui::Id>,
+    timer_details: Option<TimerDetails>,
     command: String,
     run: Option<Run>,
     watcher: DeadlineWatcher,
@@ -327,7 +340,10 @@ impl Aftermath {
             entries: vec![],
             page: Page::Focus,
             filter: Filter::default(),
+            show_filters: false,
             selected: None,
+            last_row_click: None,
+            timer_details: None,
             command: String::new(),
             run: None,
             watcher,
@@ -391,6 +407,7 @@ impl Aftermath {
             .collect()
     }
     fn selected_entry(&self) -> Option<Entry> {
+        self.filter.validate().ok()?;
         self.entries
             .iter()
             .find(|e| {
@@ -657,7 +674,7 @@ impl Aftermath {
             self.edit_selected();
         }
         if pressed(egui::Key::D)
-            && self.page == Page::History
+            && self.page == Page::Focus
             && let Some(entry) = self.selected_entry().filter(|e| !e.conflicted())
         {
             self.dialog = Some(Dialog::Delete(entry));
@@ -681,86 +698,58 @@ impl Aftermath {
             run.clock.toggle_pause(Instant::now());
         }
     }
-    fn sidebar(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("navigation")
-            .exact_width(if ctx.content_rect().width() < 850.0 {
-                190.0
-            } else {
-                208.0
-            })
-            .resizable(false)
-            .frame(egui::Frame::new().fill(surface()).inner_margin(18))
+    fn tabs(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("navigation")
+            .frame(
+                egui::Frame::new()
+                    .fill(surface())
+                    .inner_margin(egui::Margin::symmetric(14, 7)),
+            )
             .show(ctx, |ui| {
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
-                    ui.painter()
-                        .circle_stroke(rect.center(), 9.0, Stroke::new(2.0_f32, accent()));
-                    ui.painter().circle_filled(rect.center(), 3.5, accent());
-                    ui.label(RichText::new("Aftermath").size(23.0).strong());
-                });
-                ui.add_space(5.0);
-                ui.label(RichText::new("Zeit für Fokus.").color(subdued()));
-                ui.add_space(38.0);
-                for (page, label) in [
-                    (Page::Focus, "Fokus"),
-                    (Page::History, "Verlauf"),
-                    (Page::Stats, "Stats"),
-                ] {
-                    if nav(ui, label, self.page == page) {
-                        self.page = page;
-                        self.selected = None;
-                    }
-                    ui.add_space(5.0);
-                }
-                ui.add_space(24.0);
-                ui.separator();
-                ui.add_space(14.0);
-                let conflicts = self.entries.iter().filter(|e| e.conflicted()).count();
-                for (page, label) in [
-                    (Page::Trash, "Papierkorb".to_owned()),
-                    (
+                ui.horizontal_wrapped(|ui| {
+                    let conflicts = self.entries.iter().filter(|e| e.conflicted()).count();
+                    for page in [
+                        Page::Focus,
+                        Page::Stats,
+                        Page::Trash,
                         Page::Conflicts,
-                        if conflicts > 0 {
-                            format!("Konflikte   {conflicts}")
+                        Page::Settings,
+                    ] {
+                        let label = if page == Page::Conflicts && conflicts > 0 {
+                            format!("Konflikte ({conflicts})")
                         } else {
-                            "Konflikte".into()
-                        },
-                    ),
-                    (Page::Settings, "Einstellungen".into()),
-                ] {
-                    if nav(ui, &label, self.page == page) {
-                        self.page = page;
-                        self.selected = None;
-                    }
-                    ui.add_space(4.0);
-                }
-                ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-                    ui.label(
-                        RichText::new("AFTERMATH  /  0.1")
-                            .size(10.0)
-                            .color(subdued()),
-                    );
-                    ui.add_space(10.0);
-                    if let Some(run) = &self.run {
-                        let text = if run.clock.paused {
-                            "Timer pausiert"
-                        } else {
-                            "Timer läuft"
+                            page.title().to_owned()
                         };
-                        if ui.button(RichText::new(text).color(teal())).clicked() {
-                            self.page = Page::Focus;
+                        if nav(ui, &label, self.page == page) && self.page != page {
+                            self.page = page;
+                            self.selected = None;
                         }
                     }
-                    ui.label(
-                        RichText::new(if self.remote.is_some() {
-                            "Mit Turso verbunden"
+                    if self.page != Page::Focus
+                        && let Some(run) = &self.run
+                    {
+                        let now = Instant::now();
+                        let remaining = run.clock.remaining(now);
+                        let time = clock_text(
+                            remaining.unwrap_or_else(|| run.clock.elapsed(now)),
+                            remaining.is_some(),
+                        );
+                        let status = if self.save_failed {
+                            "Speicherfehler"
+                        } else if run.clock.paused {
+                            "Pausiert"
                         } else {
-                            "Auf diesem Gerät"
-                        })
-                        .size(12.0)
-                        .color(subdued()),
-                    );
+                            run.phase.label()
+                        };
+                        if ui
+                            .button(RichText::new(format!("{status} · {time}")).color(accent()))
+                            .on_hover_text("Zum Timer")
+                            .clicked()
+                        {
+                            self.page = Page::Focus;
+                            self.selected = None;
+                        }
+                    }
                 });
             });
     }
@@ -769,7 +758,7 @@ impl Aftermath {
             .frame(
                 egui::Frame::new()
                     .fill(surface())
-                    .inner_margin(egui::Margin::symmetric(20, 10)),
+                    .inner_margin(egui::Margin::symmetric(14, 5)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -812,410 +801,599 @@ impl Aftermath {
                     }
                     if self.sync_error.is_some() && ui.small_button("Details").clicked() {
                         self.page = Page::Settings;
+                        self.selected = None;
                     }
                 });
             });
-    }
-    fn focus(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let wide = ui.available_width() > 650.0;
-        if wide {
-            let left = (ui.available_width() * 0.61).min(650.0);
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(left);
-                    self.timer_card(ui, ctx);
-                });
-                ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    self.today_card(ui);
-                });
-            });
-        } else {
-            self.timer_card(ui, ctx);
-            ui.add_space(16.0);
-            self.today_card(ui);
-        }
-        ui.add_space(18.0);
-        card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new("Dein Rhythmus").size(19.0).strong());
-            ui.add_space(14.0);
-            ui.add_enabled_ui(self.run.is_none(), |ui| {
-                egui::Grid::new("timer-plan").num_columns(4).spacing([18.0, 12.0]).show(ui, |ui| {
-                    ui.label("Fokus"); ui.label("Kurze Pause"); ui.label("Lange Pause"); ui.label("Zyklen"); ui.end_row();
-                    let p = &mut self.preferences.plan;
-                    ui.add(egui::DragValue::new(&mut p.work).range(1..=240).suffix(" min"));
-                    ui.add(egui::DragValue::new(&mut p.short_break).range(1..=120).suffix(" min"));
-                    ui.add(egui::DragValue::new(&mut p.long_break).range(1..=180).suffix(" min"));
-                    ui.add(egui::DragValue::new(&mut p.cycles).range(1..=24)); ui.end_row();
-                });
-                ui.add_space(14.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut self.preferences.plan.endless, "Ohne Zeitlimit").on_hover_text("Misst deine Fokuszeit aufwärts, bis du sie speicherst oder verwirfst.");
-                    ui.checkbox(&mut self.preferences.plan.sound, "Ton am Ende");
-                });
-            });
-            ui.add_space(8.0); muted(ui, "Nach jedem vierten Zyklus folgt eine lange Pause. Der letzte Zyklus endet ohne weitere Pause.");
-        });
     }
     fn timer_card(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             let now = Instant::now();
-            let (phase, time, progress, paused) = if let Some(run) = &self.run {
-                let elapsed = run.clock.elapsed(now);
-                let duration = run.clock.remaining(now).unwrap_or(elapsed);
-                (
-                    format!("{} · Zyklus {}", run.phase.label(), run.cycle),
-                    clock_text(duration, run.clock.target.is_some()),
-                    run.clock
-                        .target
-                        .map_or(0.0, |t| elapsed.as_secs_f32() / t.as_secs_f32()),
-                    run.clock.paused,
-                )
-            } else {
-                (
-                    "Bereit, wenn du es bist".into(),
-                    if self.preferences.plan.endless {
-                        "00:00".into()
-                    } else {
-                        format!("{:02}:00", self.preferences.plan.work)
-                    },
-                    0.0,
-                    false,
-                )
-            };
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new(phase).size(14.0).color(subdued()));
-                ui.add_space(8.0);
-                let (rect, _) =
-                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 238.0), Sense::hover());
-                let center = rect.center();
-                let radius = 100.0;
-                let painter = ui.painter();
-                // A minute dial: 60 quiet marks make elapsed time tangible.
-                for tick in 0..60 {
-                    let angle =
-                        tick as f32 / 60.0 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-                    let direction = Vec2::angled(angle);
-                    let active = tick as f32 / 60.0 < progress;
-                    painter.line_segment(
-                        [
-                            center + direction * (radius - if tick % 5 == 0 { 12.0 } else { 7.0 }),
-                            center + direction * radius,
-                        ],
-                        Stroke::new(
-                            if tick % 5 == 0 { 3.0_f32 } else { 2.0_f32 },
-                            if active { accent() } else { hairline() },
-                        ),
+            if ui.available_width() >= 520.0 {
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(264.0, 0.0),
+                        Layout::top_down(Align::Center),
+                        |ui| {
+                            ui.set_width(264.0);
+                            self.timer_dial(ui, now);
+                        },
                     );
-                }
-                painter.text(
-                    center - Vec2::new(0.0, 8.0),
-                    Align2::CENTER_CENTER,
-                    time,
-                    FontId::new(45.0, FontFamily::Monospace),
-                    ink(),
-                );
-                painter.text(
-                    center + Vec2::new(0.0, 35.0),
-                    Align2::CENTER_CENTER,
-                    if self.save_failed {
-                        "Speichern erneut versuchen"
-                    } else if paused {
-                        "pausiert"
-                    } else if self.run.is_some() {
-                        "bei der Sache"
-                    } else {
-                        "Fokuszeit"
-                    },
-                    FontId::proportional(12.0),
-                    subdued(),
-                );
-            });
-            if self.run.is_none() {
-                ui.label(RichText::new("Woran arbeitest du?").strong());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.preferences.activity)
-                        .hint_text("z. B. Lernen, Schreiben, Projektarbeit")
-                        .desired_width(f32::INFINITY),
-                );
-                ui.add_space(8.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.preferences.comment)
-                        .hint_text("Notiz zur Sitzung (optional)")
-                        .desired_width(f32::INFINITY),
-                );
-                ui.add_space(14.0);
-                if primary(ui, "Fokus starten", ui.available_width()).clicked() {
-                    self.start_timer(now);
-                }
-                ui.add_space(14.0);
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(ui.available_width());
+                        self.timer_info(ui);
+                        self.timer_controls(ui, ctx, now);
+                    });
+                });
+            } else {
+                ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                    self.timer_dial(ui, now);
+                    self.timer_info(ui);
+                });
+                self.timer_controls(ui, ctx, now);
+            }
+            if self.run.is_none()
+                && let Some(details) = self.timer_details
+            {
                 ui.separator();
-                ui.add_space(10.0);
-                ui.label(RichText::new("Command-Line").strong());
-                muted(
-                    ui,
-                    "Wie in prodzCLI: -a Aktivität · -t Notiz · -w Fokus · -b Kurze Pause · -lb Lange Pause · -c Zyklen · -e Ohne Zeitlimit",
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    let input = ui.add(
-                        egui::TextEdit::singleline(&mut self.command)
-                            .hint_text("z. B. Lernen -w 30 -c 2 -t \"Vokabeln\"")
-                            .desired_width(ui.available_width() - 90.0),
-                    )
-                    .on_hover_text(
-                        "Aktivität und Zeiten wie auf der Kommandozeile: \
-                         Wörter vor den Optionen werden zur Aktivität. \
-                         Beispiel: Lernen -w 45 -b 10 -lb 20 -c 8 -e -t \"Kapitel 3\"",
-                    );
-                    let submit =
-                        input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("Starten").clicked() || submit {
-                        self.execute_command(now);
-                    }
-                });
-            } else {
-                let run = self.run.as_ref().expect("active timer");
-                ui.label(
-                    RichText::new(&run.clock.session.activity)
-                        .size(19.0)
-                        .strong(),
-                );
-                muted(ui, &run.clock.session.comment);
-                ui.add_space(14.0);
-                ui.horizontal_wrapped(|ui| {
-                    if self.save_failed {
-                        if primary(ui, "Speichern wiederholen", 180.0).clicked() {
-                            let complete = self.run.as_ref().is_some_and(|r| r.clock.complete(now));
-                            self.finish_action(complete, ctx, now, true);
-                        }
-                    } else if primary(ui, if paused { "Fortsetzen" } else { "Pausieren" }, 130.0)
-                        .clicked()
-                        && let Some(run) = &mut self.run
-                    {
-                        run.clock.toggle_pause(now);
-                    }
-                    if ui.button("Speichern & beenden").clicked() {
-                        self.finish_action(false, ctx, now, true);
-                    }
-                    if ui.button("Verwerfen").clicked() {
-                        self.dialog = Some(Dialog::Discard);
-                    }
-                });
-                ui.add_space(6.0);
-                muted(
-                    ui,
-                    "F2 pausiert und setzt fort. Nur Fokuszeit wird gespeichert.",
-                );
+                match details {
+                    TimerDetails::Plan => self.timer_plan(ui),
+                    TimerDetails::Command => self.timer_command(ui, now),
+                }
             }
         });
     }
-    fn today_card(&mut self, ui: &mut egui::Ui) {
-        card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new("Heute").size(19.0).strong());
-            muted(ui, &Local::now().format("%d.%m.%Y").to_string());
-            let date = Local::now().date_naive().to_string();
-            let sessions: Vec<_> = self.entries.iter().filter_map(Entry::active).filter(|s| s.date == date).collect();
-            let minutes: f64 = sessions.iter().map(|s| s.duration_minutes).sum();
-            ui.add_space(20.0);
-            ui.label(RichText::new(format_minutes(minutes)).size(34.0).strong());
-            muted(ui, &format!("Fokuszeit · {} Sitzungen", sessions.len()));
-            ui.add_space(18.0); ui.separator(); ui.add_space(14.0);
-            if sessions.is_empty() { muted(ui, "Deine erste Sitzung wartet. Starte den Timer oder ergänze eine Sitzung im Verlauf."); }
-            for session in sessions.iter().take(4) {
-                ui.horizontal(|ui| {
-                    ui.colored_label(activity_color(&session.activity), "●");
-                    ui.label(&session.activity);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| { ui.label(RichText::new(format_minutes(session.duration_minutes)).color(subdued())); });
-                });
-                ui.add_space(10.0);
+    /// The focus timer as a large clock dial: a watch face whose progress ring
+    /// sweeps like a hand, with the time at its center. The dial claims the
+    /// available room but stays proportionate on short windows, so the compact
+    /// layout keeps room for the history below.
+    fn timer_dial(&self, ui: &mut egui::Ui, now: Instant) {
+        let (time, progress, phase, paused) = if let Some(run) = &self.run {
+            let elapsed = run.clock.elapsed(now);
+            let remaining = run.clock.remaining(now);
+            (
+                clock_text(remaining.unwrap_or(elapsed), remaining.is_some()),
+                run.clock
+                    .target
+                    .map(|target| elapsed.as_secs_f32() / target.as_secs_f32()),
+                run.phase,
+                run.clock.paused,
+            )
+        } else {
+            (
+                if self.preferences.plan.endless {
+                    "00:00".into()
+                } else {
+                    format!("{:02}:00", self.preferences.plan.work)
+                },
+                None,
+                Phase::Work,
+                false,
+            )
+        };
+        // Height budget of navigation, status bar and panel margins. The dial
+        // shrinks on short windows so the history below stays visible even
+        // with open filters, and it stops at the column width on tall ones.
+        const CHROME: f32 = 110.0;
+        let diameter = ui
+            .available_width()
+            .min((ui.ctx().viewport_rect().height() - CHROME) * 0.36)
+            .clamp(150.0, 252.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::hover());
+        let painter = ui.painter().clone();
+        let center = rect.center();
+        let weight = 13.0;
+        let radius = diameter / 2.0 - weight / 2.0 - 1.0;
+        let face = Color32::from_rgba_unmultiplied(tint().r(), tint().g(), tint().b(), 38);
+        painter.circle_filled(center, radius, face);
+        for tick in 0..12 {
+            let angle = tick as f32 * (std::f32::consts::TAU / 12.0);
+            let direction = Vec2::new(angle.cos(), angle.sin());
+            let outer = radius - weight / 2.0 - 4.0;
+            painter.line_segment(
+                [
+                    center + direction * (outer - 6.0),
+                    center + direction * outer,
+                ],
+                Stroke::new(2.0_f32, hairline()),
+            );
+        }
+        painter.circle_stroke(center, radius, Stroke::new(weight, tint()));
+        if let Some(progress) = progress.filter(|progress| *progress > 0.0) {
+            let color = if self.save_failed {
+                danger()
+            } else {
+                let color = phase_color(phase);
+                if paused {
+                    color.gamma_multiply(0.55)
+                } else {
+                    color
+                }
+            };
+            if progress >= 1.0 {
+                painter.circle_stroke(center, radius, Stroke::new(weight, color));
+            } else {
+                let sweep = progress * std::f32::consts::TAU;
+                let steps = (sweep * 48.0).round().max(2.0) as usize;
+                let points = (0..=steps)
+                    .map(|step| {
+                        let angle =
+                            -std::f32::consts::FRAC_PI_2 + sweep * (step as f32 / steps as f32);
+                        center + Vec2::new(angle.cos(), angle.sin()) * radius
+                    })
+                    .collect::<Vec<_>>();
+                painter.add(egui::Shape::line(points, Stroke::new(weight, color)));
             }
-            ui.add_space(12.0);
-            if ui.button("Verlauf öffnen →").clicked() { self.page = Page::History; }
+        }
+        let shrink = if time.len() > 5 {
+            5.0 / time.len() as f32
+        } else {
+            1.0
+        };
+        painter.text(
+            center + Vec2::new(0.0, -diameter * 0.05),
+            Align2::CENTER_CENTER,
+            time,
+            FontId::monospace(diameter * 0.24 * shrink),
+            ink(),
+        );
+        // The phase label sits inside the dial, so the card needs no heading
+        // row beside the clock and stays flat on short windows.
+        let word = if self.run.is_some() {
+            phase.label()
+        } else {
+            "Fokustimer"
+        };
+        let word_color = if self.run.is_none() {
+            ink()
+        } else if self.save_failed {
+            danger()
+        } else {
+            phase_color(phase)
+        };
+        painter.text(
+            center + Vec2::new(0.0, diameter * 0.13),
+            Align2::CENTER_CENTER,
+            word,
+            FontId::proportional((diameter * 0.09).clamp(13.0, 18.0)),
+            word_color,
+        );
+        let status = if self.save_failed {
+            Some(("Speicherfehler", danger()))
+        } else if paused {
+            Some(("pausiert", subdued()))
+        } else {
+            None
+        };
+        if let Some((status, color)) = status {
+            painter.text(
+                center + Vec2::new(0.0, diameter * 0.25),
+                Align2::CENTER_CENTER,
+                status,
+                FontId::proportional((diameter * 0.07).clamp(10.0, 13.0)),
+                color,
+            );
+        }
+    }
+    /// Context line beside the dial: cycle position while running, the plan
+    /// summary while idle.
+    fn timer_info(&self, ui: &mut egui::Ui) {
+        if let Some(run) = &self.run {
+            if run.clock.target.is_some() {
+                muted(ui, &format!("Zyklus {} von {}", run.cycle, run.plan.cycles));
+            } else {
+                muted(ui, "Ohne Zeitlimit");
+            }
+        } else {
+            let plan = &self.preferences.plan;
+            if plan.endless {
+                muted(ui, "Ohne Zeitlimit");
+            } else {
+                muted(
+                    ui,
+                    &format!(
+                        "{} × {} min · {} min Pause",
+                        plan.cycles, plan.work, plan.short_break
+                    ),
+                );
+            }
+        }
+    }
+    fn timer_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, now: Instant) {
+        if let Some(run) = &self.run {
+            let paused = run.clock.paused;
+            let pause = run.phase != Phase::Work;
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&run.clock.session.activity)
+                        .size(18.0)
+                        .strong(),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&run.clock.session.activity);
+            if !run.clock.session.comment.is_empty() {
+                ui.add(
+                    egui::Label::new(RichText::new(&run.clock.session.comment).color(subdued()))
+                        .truncate(),
+                )
+                .on_hover_text(&run.clock.session.comment);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if self.save_failed {
+                    if primary(ui, "Speichern wiederholen", 0.0).clicked() {
+                        let complete = self.run.as_ref().is_some_and(|r| r.clock.complete(now));
+                        self.finish_action(complete, ctx, now, true);
+                    }
+                } else if primary(ui, if paused { "Fortsetzen" } else { "Pausieren" }, 0.0)
+                    .on_hover_text("F2")
+                    .clicked()
+                    && let Some(run) = &mut self.run
+                {
+                    run.clock.toggle_pause(now);
+                }
+                if !self.save_failed
+                    && ui
+                        .button(if pause {
+                            "Timer beenden"
+                        } else {
+                            "Speichern & beenden"
+                        })
+                        .clicked()
+                {
+                    self.finish_action(false, ctx, now, true);
+                }
+                if ui.button("Verwerfen").clicked() {
+                    self.dialog = Some(Dialog::Discard);
+                }
+            });
+            return;
+        }
+
+        let mut start = false;
+        ui.columns(2, |columns| {
+            columns[0].label("Aktivität");
+            let input = columns[0].add(
+                egui::TextEdit::singleline(&mut self.preferences.activity)
+                    .hint_text("Was steht an?")
+                    .min_size(Vec2::new(0.0, 29.0))
+                    .desired_width(f32::INFINITY),
+            );
+            start = input.lost_focus() && columns[0].input(|i| i.key_pressed(egui::Key::Enter));
+            columns[1].label("Notiz");
+            let input = columns[1].add(
+                egui::TextEdit::singleline(&mut self.preferences.comment)
+                    .hint_text("Optional")
+                    .min_size(Vec2::new(0.0, 29.0))
+                    .desired_width(f32::INFINITY),
+            );
+            start |= input.lost_focus() && columns[1].input(|i| i.key_pressed(egui::Key::Enter));
         });
+        ui.horizontal_wrapped(|ui| {
+            if primary(ui, "Fokus starten", 0.0).clicked() || start {
+                self.start_timer(now);
+            }
+            for (details, label) in [
+                (TimerDetails::Plan, "Timer-Plan"),
+                (TimerDetails::Command, "Command-Line"),
+            ] {
+                let expanded = self.timer_details == Some(details);
+                if ui
+                    .add(egui::Button::new(label).selected(expanded))
+                    .clicked()
+                {
+                    self.timer_details = (!expanded).then_some(details);
+                }
+            }
+        });
+    }
+    fn timer_plan(&mut self, ui: &mut egui::Ui) {
+        let plan = &mut self.preferences.plan;
+        ui.add_enabled_ui(!plan.endless, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (label, value, max) in [
+                    ("Fokus", &mut plan.work, 240),
+                    ("Kurze Pause", &mut plan.short_break, 120),
+                    ("Lange Pause", &mut plan.long_break, 180),
+                    ("Zyklen", &mut plan.cycles, 24),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        let duration = egui::DragValue::new(value).range(1..=max);
+                        ui.add(if label == "Zyklen" {
+                            duration
+                        } else {
+                            duration.suffix(" min")
+                        });
+                    });
+                }
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut plan.endless, "Ohne Zeitlimit")
+                .on_hover_text(
+                    "Misst deine Fokuszeit aufwärts, bis du sie speicherst oder verwirfst.",
+                );
+            ui.checkbox(&mut plan.sound, "Ton am Ende");
+            muted(
+                ui,
+                "Lange Pause nach jedem vierten Zyklus, sofern ein weiterer folgt.",
+            );
+        });
+    }
+    fn timer_command(&mut self, ui: &mut egui::Ui, now: Instant) {
+        ui.horizontal(|ui| {
+            let input = ui.add(
+                egui::TextEdit::singleline(&mut self.command)
+                    .hint_text("Lernen -w 30 -c 2 -t \"Vokabeln\"")
+                    .min_size(Vec2::new(0.0, 29.0))
+                    .desired_width(ui.available_width() - 88.0),
+            );
+            let submit = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Starten").clicked() || submit {
+                self.execute_command(now);
+            }
+        });
+        muted(
+            ui,
+            "-a Aktivität · -t Notiz · -w Fokus · -b Kurze Pause · -lb Lange Pause · -c Zyklen · -e Ohne Zeitlimit",
+        );
     }
     fn filters(&mut self, ui: &mut egui::Ui) {
-        card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        let extra_filters = [
+            &self.filter.activity,
+            &self.filter.since,
+            &self.filter.until,
+        ]
+        .iter()
+        .filter(|value| !value.is_empty())
+        .count();
+        let active = extra_filters > 0 || !self.filter.search.is_empty();
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter.search)
+                    .hint_text("Sitzungen suchen …")
+                    .min_size(Vec2::new(0.0, 29.0))
+                    .desired_width(210.0),
+            );
+            let label = if extra_filters > 0 {
+                format!("Filter ({extra_filters})")
+            } else {
+                "Filter".into()
+            };
+            if ui
+                .add(egui::Button::new(label).selected(self.show_filters))
+                .on_hover_text("Nach Aktivität und Datum filtern")
+                .clicked()
+            {
+                self.show_filters = !self.show_filters;
+            }
+            if active && ui.button("Filter zurücksetzen").clicked() {
+                self.filter = Filter::default();
+            }
+        });
+        if self.show_filters {
             ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.filter.search)
-                        .hint_text("Verlauf durchsuchen …")
-                        .desired_width(210.0),
-                );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.filter.activity)
                         .hint_text("Aktivität filtern")
                         .desired_width(150.0),
                 );
-                ui.label("Von");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.filter.since)
-                        .hint_text("JJJJ-MM-TT")
-                        .desired_width(100.0),
-                );
-                ui.label("Bis");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.filter.until)
-                        .hint_text("JJJJ-MM-TT")
-                        .desired_width(100.0),
-                );
-                if ui.button("Zurücksetzen").clicked() {
-                    self.filter = Filter::default();
+                for (label, value) in [
+                    ("Von", &mut self.filter.since),
+                    ("Bis", &mut self.filter.until),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        ui.add(
+                            egui::TextEdit::singleline(value)
+                                .hint_text("JJJJ-MM-TT")
+                                .desired_width(100.0),
+                        );
+                    });
                 }
             });
-            if let Err(e) = self.filter.validate() {
-                ui.colored_label(danger(), e.to_string());
-            }
-        });
-        ui.add_space(16.0);
-    }
-    fn history(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.filters(ui);
-        let entries = self.filtered(self.page.view());
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("{} Sitzungen", entries.len())).color(subdued()));
-            if self.page == Page::History && primary(ui, "+ Sitzung ergänzen", 165.0).clicked() {
-                self.dialog = Some(Dialog::Editor(Box::new(Editor::new(None))));
-            }
-            let selected = self.selected_entry();
-            if ui
-                .add_enabled(
-                    selected.is_some(),
-                    egui::Button::new(
-                        if self.page == Page::Conflicts
-                            || selected.as_ref().is_some_and(Entry::conflicted)
-                        {
-                            "Konflikt auflösen"
-                        } else {
-                            "Bearbeiten"
-                        },
-                    ),
-                )
-                .clicked()
-            {
-                self.edit_selected();
-            }
-            if self.page == Page::History
-                && ui
-                    .add_enabled(
-                        selected.as_ref().is_some_and(|e| !e.conflicted()),
-                        egui::Button::new("In Papierkorb"),
-                    )
-                    .clicked()
-            {
-                self.dialog = selected.clone().map(Dialog::Delete);
-            }
-            if self.page == Page::Trash
-                && ui
-                    .add_enabled(selected.is_some(), egui::Button::new("Wiederherstellen"))
-                    .clicked()
-            {
-                self.restore_selected(ctx);
-            }
-            if self.page == Page::History && ui.button("CSV exportieren").clicked() {
-                self.export_dialog();
-            }
-        });
-        ui.add_space(14.0);
-        if entries.is_empty() {
-            card().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add_space(20.0);
-                ui.label(
-                    RichText::new(match self.page {
-                        Page::Trash => "Der Papierkorb ist leer.",
-                        Page::Conflicts => "Alles im Einklang.",
-                        _ => "Hier beginnt dein Verlauf.",
-                    })
-                    .size(21.0)
-                    .strong(),
-                );
-                muted(
-                    ui,
-                    if self.filter.search.is_empty()
-                        && self.filter.activity.is_empty()
-                        && self.filter.since.is_empty()
-                        && self.filter.until.is_empty()
-                    {
-                        match self.page {
-                            Page::Trash => "Gelöschte Sitzungen erscheinen hier.",
-                            Page::Conflicts => "Es gibt keine konkurrierenden Änderungen.",
-                            _ => "Starte eine Fokuszeit oder ergänze eine vergangene Sitzung.",
-                        }
-                    } else {
-                        "Keine passenden Sitzungen. Passe die Filter an oder setze sie zurück."
-                    },
-                );
-                ui.add_space(20.0);
-            });
-            return;
         }
+        if let Err(e) = self.filter.validate() {
+            ui.colored_label(danger(), e.to_string());
+        }
+    }
+    fn history(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        previous_click: Option<egui::Id>,
+    ) {
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            egui::ScrollArea::both()
-                .id_salt("history-table-scroll")
-                .max_height((ctx.content_rect().height() - 360.0).max(160.0))
-                .show(ui, |ui| {
-                    egui::Grid::new("history-table")
-                        .num_columns(5)
-                        .striped(true)
-                        .spacing([22.0, 13.0])
-                        .min_col_width(65.0)
-                        .show(ui, |ui| {
-                            for text in ["Datum / Uhrzeit", "Aktivität", "Dauer", "Notiz", "Status"]
-                            {
-                                ui.label(RichText::new(text).strong().color(subdued()));
-                            }
-                            ui.end_row();
-                            for entry in &entries {
-                                let session = &entry.heads[0].session;
-                                let selected = self.selected.as_ref() == Some(&entry.session_id);
-                                let response = ui.selectable_label(
-                                    selected,
-                                    short_timestamp(&session.timestamp),
-                                );
-                                if response.clicked() {
-                                    self.selected = Some(entry.session_id.clone());
-                                }
-                                if response.double_clicked() {
-                                    self.dialog = Some(Dialog::Editor(Box::new(Editor::new(
-                                        Some(entry.clone()),
-                                    ))));
-                                }
-                                response.on_hover_text(format!(
-                                    "{}\nSitzung {}",
-                                    session.timestamp, entry.session_id
-                                ));
-                                let response = ui.selectable_label(selected, &session.activity);
-                                if response.clicked() {
-                                    self.selected = Some(entry.session_id.clone());
-                                }
-                                ui.label(format_minutes(session.duration_minutes));
-                                ui.add(egui::Label::new(&session.comment).truncate())
-                                    .on_hover_text(&session.comment);
-                                if entry.conflicted() {
-                                    ui.colored_label(
-                                        danger(),
-                                        format!("{} Versionen", entry.heads.len()),
-                                    );
-                                } else if self.page == Page::Trash {
-                                    ui.colored_label(subdued(), "Gelöscht");
-                                } else if let Err(error) = session.clone().validated() {
-                                    ui.colored_label(subdued(), "Altdaten prüfen")
-                                        .on_hover_text(error.to_string());
-                                } else {
-                                    ui.colored_label(teal(), "Gespeichert");
-                                }
-                                ui.end_row();
-                            }
-                        });
+            if self.page == Page::Focus {
+                let today = Local::now().date_naive().to_string();
+                let (count, minutes) = self
+                    .entries
+                    .iter()
+                    .filter_map(Entry::active)
+                    .filter(|session| session.date == today)
+                    .fold((0, 0.0), |(count, minutes), session| {
+                        (count + 1, minutes + session.duration_minutes)
+                    });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Verlauf").size(20.0).strong());
+                    let sessions = if count == 1 { "Sitzung" } else { "Sitzungen" };
+                    muted(
+                        ui,
+                        &format!("Heute · {} · {count} {sessions}", format_minutes(minutes)),
+                    );
                 });
+            }
+            self.filters(ui);
+            let entries = self.filtered(self.page.view());
+            self.history_actions(ui, ctx, entries.len());
+
+            if entries.is_empty() {
+                let message = if [
+                    &self.filter.search,
+                    &self.filter.activity,
+                    &self.filter.since,
+                    &self.filter.until,
+                ]
+                .iter()
+                .any(|value| !value.is_empty())
+                {
+                    "Keine passenden Sitzungen."
+                } else {
+                    match self.page {
+                        Page::Trash => "Der Papierkorb ist leer.",
+                        Page::Conflicts => "Es gibt keine offenen Konflikte.",
+                        _ => "Starte den Timer oder ergänze eine Sitzung.",
+                    }
+                };
+                ui.separator();
+                muted(ui, message);
+            } else {
+                self.history_table(ui, &entries, previous_click);
+            }
         });
+    }
+    fn history_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, count: usize) {
+        ui.horizontal_wrapped(|ui| {
+            if self.page == Page::Focus {
+                if ui
+                    .button("+ Sitzung ergänzen")
+                    .on_hover_text("Strg+N")
+                    .clicked()
+                {
+                    self.dialog = Some(Dialog::Editor(Box::new(Editor::new(None))));
+                }
+                if ui.button("CSV exportieren").clicked() {
+                    self.export_dialog();
+                }
+            }
+            if let Some(entry) = self.selected_entry() {
+                let edit = if entry.conflicted() {
+                    "Konflikt auflösen"
+                } else {
+                    "Bearbeiten"
+                };
+                if ui.button(edit).on_hover_text("Strg+E").clicked() {
+                    self.dialog = Some(Dialog::Editor(Box::new(Editor::new(Some(entry.clone())))));
+                }
+                if !entry.conflicted() {
+                    match self.page {
+                        Page::Focus
+                            if ui.button("In Papierkorb").on_hover_text("Strg+D").clicked() =>
+                        {
+                            self.dialog = Some(Dialog::Delete(entry));
+                        }
+                        Page::Trash
+                            if ui
+                                .button("Wiederherstellen")
+                                .on_hover_text("Strg+R")
+                                .clicked() =>
+                        {
+                            self.restore_selected(ctx);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if count > 0 {
+                let sessions = if count == 1 { "Sitzung" } else { "Sitzungen" };
+                muted(ui, &format!("{count} {sessions}"));
+            }
+        });
+    }
+    fn history_table(
+        &mut self,
+        ui: &mut egui::Ui,
+        entries: &[Entry],
+        previous_click: Option<egui::Id>,
+    ) {
+        const ROW_HEIGHT: f32 = 31.0;
+        let width = ui.available_width();
+        let (_, table) =
+            ui.allocate_space(Vec2::new(width, ROW_HEIGHT * (entries.len() + 1) as f32));
+        let row_rect = |index: usize| {
+            egui::Rect::from_min_size(
+                table.min + Vec2::new(0.0, index as f32 * ROW_HEIGHT),
+                Vec2::new(width, ROW_HEIGHT),
+            )
+        };
+        let header = row_rect(0);
+        ui.painter().rect_filled(header, 5, background());
+        history_cells(
+            ui,
+            header,
+            ["Datum / Uhrzeit", "Aktivität", "Dauer", "Notiz", "Status"]
+                .map(|label| RichText::new(label).strong().color(subdued())),
+        );
+
+        // Lay out the visible rows within the page's scroll area.
+        let visible = ui.clip_rect().intersect(table);
+        let first = ((visible.top() - table.top()) / ROW_HEIGHT).floor() as usize;
+        let end = ((visible.bottom() - table.top()) / ROW_HEIGHT).ceil() as usize;
+        for index in first.max(1)..end.min(entries.len() + 1) {
+            let entry = &entries[index - 1];
+            let session = &entry.heads[0].session;
+            let row = row_rect(index);
+            let selected = self.selected.as_ref() == Some(&entry.session_id);
+            let response = ui.interact(row, ui.id().with(&entry.session_id), Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::SelectableLabel,
+                    true,
+                    selected,
+                    &session.activity,
+                )
+            });
+            if response.clicked() {
+                self.selected = Some(entry.session_id.clone());
+            }
+            if response.clicked_by(egui::PointerButton::Primary) {
+                self.last_row_click = Some(response.id);
+            }
+            if previous_click == Some(response.id)
+                && (response.double_clicked() || response.triple_clicked())
+            {
+                self.dialog = Some(Dialog::Editor(Box::new(Editor::new(Some(entry.clone())))));
+            }
+            if selected || response.hovered() || response.has_focus() {
+                ui.painter().rect_filled(row, 5, tint());
+            } else if index % 2 == 0 {
+                ui.painter().rect_filled(row, 5, background());
+            }
+
+            let mut validation_error = None;
+            let status = if entry.conflicted() {
+                RichText::new(format!("{} Versionen", entry.heads.len())).color(danger())
+            } else if self.page == Page::Trash {
+                RichText::new("Gelöscht").color(subdued())
+            } else if let Err(error) = session.clone().validated() {
+                validation_error = Some(error.to_string());
+                RichText::new("Altdaten prüfen").color(danger())
+            } else {
+                RichText::new("")
+            };
+            let [timestamp, _, _, _, status] = history_cells(
+                ui,
+                row,
+                [
+                    RichText::new(short_timestamp(&session.timestamp)).color(subdued()),
+                    RichText::new(&session.activity).strong(),
+                    RichText::new(format_minutes(session.duration_minutes)),
+                    RichText::new(&session.comment).color(subdued()),
+                    status,
+                ],
+            );
+            timestamp.on_hover_text(format!(
+                "{}\nSitzung {}",
+                session.timestamp, entry.session_id
+            ));
+            if let Some(error) = validation_error {
+                status.on_hover_text(error);
+            }
+        }
     }
     fn stats(&mut self, ui: &mut egui::Ui) {
         self.filters(ui);
@@ -1626,31 +1804,32 @@ impl Aftermath {
             self.request_close(ctx);
         }
         self.shortcuts(ctx);
+        let previous_click = if ctx.input(|i| i.pointer.primary_clicked()) {
+            self.last_row_click.take()
+        } else {
+            None
+        };
+        self.tabs(ctx);
         self.footer(ctx);
-        self.sidebar(ctx);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(background()).inner_margin(26))
+            .frame(egui::Frame::new().fill(background()).inner_margin(14))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt(("page-scroll", self.page as u8))
                     .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(self.page.title()).size(28.0).strong());
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(Local::now().format("%d.%m.%Y").to_string())
-                                        .color(subdued()),
-                                );
-                            });
-                        });
-                        muted(ui, self.page.subtitle());
-                        ui.add_space(22.0);
+                        if self.page != Page::Focus {
+                            ui.label(RichText::new(self.page.title()).size(23.0).strong());
+                            let subtitle = self.page.subtitle();
+                            if !subtitle.is_empty() {
+                                muted(ui, subtitle);
+                            }
+                        }
                         if let Some((notice, error)) = &self.notice {
                             let mut dismiss = false;
                             egui::Frame::new()
                                 .fill(if *error { notice_error_bg() } else { tint() })
                                 .corner_radius(8)
-                                .inner_margin(12)
+                                .inner_margin(8)
                                 .show(ui, |ui| {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.colored_label(
@@ -1665,13 +1844,16 @@ impl Aftermath {
                             if dismiss {
                                 self.notice = None;
                             }
-                            ui.add_space(14.0);
                         }
                         match self.page {
-                            Page::Focus => self.focus(ui, ctx),
+                            Page::Focus => {
+                                self.timer_card(ui, ctx);
+                                ui.add_space(10.0);
+                                self.history(ui, ctx, previous_click);
+                            }
                             Page::Stats => self.stats(ui),
                             Page::Settings => self.settings(ui, ctx),
-                            _ => self.history(ui, ctx),
+                            _ => self.history(ui, ctx, previous_click),
                         }
                     });
             });
@@ -1732,9 +1914,9 @@ fn configure_style(ctx: &egui::Context, palette: Palette) {
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     style.visuals.widgets.active.bg_fill = palette.tint;
     style.visuals.widgets.active.weak_bg_fill = palette.tint;
-    style.spacing.item_spacing = Vec2::new(9.0, 8.0);
-    style.spacing.button_padding = Vec2::new(13.0, 9.0);
-    style.spacing.interact_size.y = 33.0;
+    style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+    style.spacing.button_padding = Vec2::new(10.0, 6.0);
+    style.spacing.interact_size.y = 29.0;
     style
         .text_styles
         .insert(egui::TextStyle::Body, FontId::proportional(14.0));
@@ -1748,7 +1930,7 @@ fn card() -> egui::Frame {
         .fill(surface())
         .stroke(Stroke::new(1.0_f32, hairline()))
         .corner_radius(12)
-        .inner_margin(20)
+        .inner_margin(14)
 }
 fn muted(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).color(subdued()).size(13.0));
@@ -1759,16 +1941,20 @@ fn field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
 }
 fn primary(ui: &mut egui::Ui, text: &str, width: f32) -> egui::Response {
-    ui.add_sized(
-        [width, 39.0],
-        egui::Button::new(RichText::new(text).color(Color32::WHITE).strong())
+    let foreground = if palette().dark {
+        background()
+    } else {
+        Color32::WHITE
+    };
+    ui.add(
+        egui::Button::new(RichText::new(text).color(foreground).strong())
+            .min_size(Vec2::new(width, 29.0))
             .fill(accent())
             .corner_radius(7),
     )
 }
 fn nav(ui: &mut egui::Ui, text: &str, active: bool) -> bool {
-    ui.add_sized(
-        [ui.available_width(), 40.0],
+    ui.add(
         egui::Button::new(
             RichText::new(text)
                 .color(if active { accent() } else { subdued() })
@@ -1779,6 +1965,25 @@ fn nav(ui: &mut egui::Ui, text: &str, active: bool) -> bool {
         .corner_radius(7),
     )
     .clicked()
+}
+fn history_cells(ui: &mut egui::Ui, row: egui::Rect, cells: [RichText; 5]) -> [egui::Response; 5] {
+    let flexible = (row.width() - 310.0).max(0.0);
+    let mut widths = [134.0, flexible * 0.45, 76.0, flexible * 0.55, 100.0].into_iter();
+    let mut left = row.left();
+    cells.map(|text| {
+        let right = left + widths.next().expect("column width");
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(left + 8.0, row.top()),
+            egui::pos2(right, row.bottom()),
+        );
+        left = right;
+        ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(cell)
+                .layout(Layout::left_to_right(Align::Center)),
+        )
+        .add(egui::Label::new(text).truncate().selectable(false))
+    })
 }
 fn daily_focus_chart(
     ui: &mut egui::Ui,
@@ -2311,7 +2516,9 @@ mod tests {
         }
     }
     fn click(app: &mut Aftermath, ctx: &egui::Context, label: &str) {
-        let size = Vec2::new(1180.0, 820.0);
+        click_at_size(app, ctx, label, Vec2::new(1180.0, 820.0));
+    }
+    fn click_at_size(app: &mut Aftermath, ctx: &egui::Context, label: &str, size: Vec2) {
         for _ in 0..3 {
             frame(app, ctx, vec![], size);
         }
@@ -2377,7 +2584,6 @@ mod tests {
         click(&mut app, &ctx, "Speichern");
         assert!(app.dialog.is_none());
         assert_eq!(app.store.entries().unwrap().len(), 1);
-        click(&mut app, &ctx, "Verlauf");
         click(&mut app, &ctx, "UI Lernen");
         click(&mut app, &ctx, "Bearbeiten");
         let Some(Dialog::Editor(editor)) = &mut app.dialog else {
@@ -2396,7 +2602,7 @@ mod tests {
         click(&mut app, &ctx, "UI Rust");
         click(&mut app, &ctx, "Wiederherstellen");
         assert!(app.store.entries().unwrap()[0].active().is_some());
-        click(&mut app, &ctx, "Verlauf");
+        click(&mut app, &ctx, "Fokus & Verlauf");
         click(&mut app, &ctx, "CSV exportieren");
         let target = dir.path().join("ui-export.csv");
         let Some(Dialog::Export { path, .. }) = &mut app.dialog else {
@@ -2408,9 +2614,38 @@ mod tests {
     }
 
     #[test]
+    fn compact_focus_tab_shows_timer_and_editable_history_together() {
+        let (_dir, mut app, ctx) = app();
+        app.store
+            .create(Session::now("Lesen", 15.0, "Kapitel 2"), None)
+            .unwrap();
+        app.reload();
+        let size = Vec2::new(626.0, 520.0);
+        let output = frame(&mut app, &ctx, vec![], size);
+        for label in ["Fokus starten", "Lesen"] {
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|shape| text_position(&shape.shape, label)
+                        .is_some_and(|pos| shape.clip_rect.contains(pos))),
+                "{label} fehlt"
+            );
+        }
+        click_at_size(&mut app, &ctx, "Filter", size);
+        assert!(app.show_filters);
+        click_at_size(&mut app, &ctx, "Kapitel 2", size);
+        assert!(app.selected.is_some());
+        assert!(app.dialog.is_none());
+        click_at_size(&mut app, &ctx, "Kapitel 2", size);
+        assert!(matches!(app.dialog, Some(Dialog::Editor(_))));
+    }
+
+    #[test]
     fn ui_command_line_defines_activity_and_starts_timer() {
         let (_dir, mut app, ctx) = app();
         app.command = "Lernen -w 30 -b 5 -lb 20 -c 6 -t \"Vokabeln\"".into();
+        click(&mut app, &ctx, "Command-Line");
         click(&mut app, &ctx, "Starten");
         let run = app.run.as_ref().expect("Timer über Command-Line gestartet");
         assert_eq!(run.clock.session.activity, "Lernen");
@@ -2443,6 +2678,7 @@ mod tests {
     fn ui_command_line_reports_parse_errors_without_starting() {
         let (_dir, mut app, ctx) = app();
         app.command = "Lernen -x 5".into();
+        click(&mut app, &ctx, "Command-Line");
         click(&mut app, &ctx, "Starten");
         assert!(app.run.is_none());
         let (text, error) = app.notice.as_ref().expect("Fehlermeldung erwartet");
@@ -2641,13 +2877,12 @@ mod tests {
     fn all_pages_and_editor_render_at_small_and_large_sizes() {
         let (_dir, mut app, ctx) = app();
         for size in [
-            Vec2::new(626.0, 700.0),
+            Vec2::new(626.0, 520.0),
             Vec2::new(720.0, 560.0),
             Vec2::new(1180.0, 820.0),
         ] {
             for page in [
                 Page::Focus,
-                Page::History,
                 Page::Stats,
                 Page::Trash,
                 Page::Conflicts,
@@ -2707,9 +2942,11 @@ mod tests {
         };
         app.store.merge(&[first, second], false).unwrap();
         app.reload();
-        click(&mut app, &ctx, "Konflikte   1");
+        click(&mut app, &ctx, "Konflikte (1)");
         click(&mut app, &ctx, "Version A");
+        assert_eq!(app.selected.as_deref(), Some("conflict"));
         click(&mut app, &ctx, "Konflikt auflösen");
+        assert!(matches!(app.dialog, Some(Dialog::Editor(_))));
         click(&mut app, &ctx, "Version 1 von 2");
         click(&mut app, &ctx, "2 · 2026-01-01  12:00 · Papierkorb");
         let Some(Dialog::Editor(editor)) = &mut app.dialog else {
